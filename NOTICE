@@ -19,3 +19,5 @@ codex-rs/tui/src/color.rs → crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI
 codex-rs/tui/src/terminal_palette.rs → crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
 codex-rs/tui/src/terminal_probe.rs → crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
 codex-rs/tui/src/style/contrast.rs → crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/summary_shimmer.rs → crates/twolab-tui/src/widgets/shimmer/mod.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/shimmer.rs → crates/twolab-tui/src/widgets/shimmer/mod.rs (Apache-2.0, OpenAI, modified)
