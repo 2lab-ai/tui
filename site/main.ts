@@ -102,6 +102,9 @@ interface Term {
   visible: boolean;
 }
 
+/** Widest a home-page tile renders a demo, in cells. */
+const THUMB_COLS = 56;
+
 let cat: Catalog;
 let doc: CatalogDoc;
 let terms: Term[] = [];
@@ -454,7 +457,8 @@ function mountThumbs(): void {
     const pre = box.querySelector<HTMLElement>('pre.term');
     if (!c || !pre || !c.demos[0]) continue;
     const d = c.demos[0];
-    const t = mount(pre, `${c.slug}/${d.id}`, d.cols, d.rows, d.animated, 150);
+    // Tiles stay legible: a wide demo renders at tile width, which also shows how the widget gives way.
+    const t = mount(pre, `${c.slug}/${d.id}`, Math.min(d.cols, THUMB_COLS), d.rows, d.animated, 150);
     if (!t) continue;
     fitThumb(box, pre);
     tileObserver?.observe(pre);
