@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = ["crates/twolab-tui", "crates/catalog-wasm"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/2lab-ai/tui"
+homepage = "https://2lab.ai/tui"
+
+[workspace.dependencies]
+# No default features: the library never needs a terminal backend, and the
+# catalog builds it for wasm32-unknown-unknown where crossterm does not compile.
+# A host that renders to a terminal (llmux) turns `crossterm` on itself, and
+# cargo unifies the features.
+ratatui = { version = "0.30.1", default-features = false, features = ["std", "layout-cache", "underline-color"] }
+unicode-width = "0.2.2"
+unicode-segmentation = "1.13"
+
+[profile.release]
+opt-level = "s"
+
+# The catalog's wasm module: small, no unwinding tables.
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

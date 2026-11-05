@@ -1,0 +1,25 @@
+{
+  "name": "twolab-tui-site",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The twolab-tui catalog at https://2lab.ai/tui — every ratatui demo compiled to WebAssembly and drawn into a cell grid",
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build:wasm": "bash scripts/build-wasm.sh",
+    "dev": "npm run build:wasm && vite --config vite.config.ts",
+    "build:site": "npm run build:wasm && vite build --config vite.config.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "biome check site scripts *.ts *.json"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.10",
+    "@types/node": "^26.6.6",
+    "happy-dom": "^20.0.0",
+    "marked": "^16.4.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.7",
+    "vitest": "^4.0.15"
+  }
+}

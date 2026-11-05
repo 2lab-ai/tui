@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>2lab/tui — Terminal UI components</title>
+    <meta name="description" content="ratatui widgets for agent and dashboard TUIs — quota bars, spinners, shimmer, key hints, pickers, pagers — from llmux, OpenAI Codex and Vercel fx, with live demos compiled to WebAssembly." />
+    <link rel="icon" href="%BASE_URL%favicon.svg" type="image/svg+xml" />
+    <script>
+      try {
+        var t = localStorage.getItem('2lab-tui-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

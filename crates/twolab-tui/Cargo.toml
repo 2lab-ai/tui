@@ -1,0 +1,28 @@
+[package]
+name = "twolab-tui"
+description = "Terminal UI components for ratatui — the terminal sibling of @2lab.ai/ui, built from llmux, Codex and fx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["tui", "ratatui", "terminal", "widgets", "components"]
+categories = ["command-line-interface"]
+
+[features]
+default = []
+# The docs and demos the catalog renders (https://2lab.ai/tui). Hosts leave it off.
+catalog = []
+# `KeyInput::from_crossterm`.
+crossterm = ["dep:crossterm"]
+
+[dependencies]
+ratatui = { workspace = true }
+unicode-width = { workspace = true }
+unicode-segmentation = { workspace = true }
+crossterm = { version = "0.29", optional = true, default-features = false }
+
+[dev-dependencies]
+twolab-tui = { path = ".", features = ["catalog"] }

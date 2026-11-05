@@ -1,0 +1,15 @@
+[package]
+name = "twolab-tui-catalog-wasm"
+description = "The browser catalog's renderer: every twolab-tui demo, drawn into a buffer, exported as styled runs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+twolab-tui = { path = "../twolab-tui", features = ["catalog"] }
+ratatui = { workspace = true }
