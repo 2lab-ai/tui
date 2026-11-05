@@ -2,11 +2,12 @@ use super::ComponentDoc;
 use crate::widgets;
 
 /// Sidebar order: agent first, then data, input, primitives.
-pub const ORDER: &[&str] = &["working", "shimmer", "key-hints", "spinner"];
+pub const ORDER: &[&str] = &["working", "shimmer", "status-card", "key-hints", "spinner"];
 
 static DOCS: &[&ComponentDoc] = &[
     &widgets::working::docs::DOC,
     &widgets::shimmer::docs::DOC,
+    &widgets::status_card::docs::DOC,
     &widgets::key_hints::docs::DOC,
     &widgets::spinner::docs::DOC,
 ];

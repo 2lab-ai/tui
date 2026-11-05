@@ -4,4 +4,5 @@
 pub mod key_hints;
 pub mod shimmer;
 pub mod spinner;
+pub mod status_card;
 pub mod working;

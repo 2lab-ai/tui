@@ -26,3 +26,6 @@ codex-rs/tui/src/status_indicator_widget/timer.rs → crates/twolab-tui/src/widg
 codex-rs/tui/src/key_hint.rs → crates/twolab-tui/src/widgets/key_hints/mod.rs (Apache-2.0, OpenAI, modified)
 codex-rs/tui/src/footer_hint.rs → crates/twolab-tui/src/widgets/key_hints/mod.rs (Apache-2.0, OpenAI, modified)
 codex-rs/tui/src/shortcut_help.rs → crates/twolab-tui/src/widgets/key_hints/mod.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/status/format.rs → crates/twolab-tui/src/widgets/status_card/mod.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/status/rate_limits.rs → crates/twolab-tui/src/widgets/status_card/mod.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/status/card.rs → crates/twolab-tui/src/widgets/status_card/mod.rs (Apache-2.0, OpenAI, modified)
