@@ -450,7 +450,9 @@ function mountStage(): void {
   mount(el, `${current.comp.slug}/${d.id}`, cols, d.rows, d.animated, 33);
   if (label) label.textContent = `${current.comp.slug} — ${cols}×${d.rows}`;
   if (note) {
-    const keys = d.interactive ? ' Click the terminal, then use the keys listed below; Esc or Tab leaves it.' : '';
+    const keys = d.interactive
+      ? ' Click the terminal, then use the keys listed below; Shift+Tab always leaves it.'
+      : '';
     note.textContent = `${d.description}${keys}`;
     note.hidden = !note.textContent;
   }
@@ -624,7 +626,8 @@ document.addEventListener('keydown', (e) => {
   if (!current || !el || el.id !== 'term-input' || !current.demo.interactive) return;
   const t = stageTerm();
   if (!t) return;
-  if (e.key === 'Tab' && !current.comp.keyboard.some(([k]) => /tab/i.test(k))) return;
+  // Shift+Tab always leaves (a demo may use Tab and Esc itself); Tab leaves unless the demo lists it.
+  if (e.key === 'Tab' && (e.shiftKey || !current.comp.keyboard.some(([k]) => /tab/i.test(k)))) return;
   // Korean, Japanese and Chinese input: wait for the committed text, never send a half-composed syllable.
   if (e.metaKey || e.isComposing || e.key === 'Process') return;
   let changed: boolean;

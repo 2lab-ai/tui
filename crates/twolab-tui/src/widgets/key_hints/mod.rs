@@ -196,6 +196,9 @@ pub struct KeyHint<'a> {
     pub label: Cow<'a, str>,
     /// Higher stays longer when the footer runs out of room. Default 0.
     pub priority: u8,
+    /// Shown but not available right now (`R reload` while attached to a
+    /// remote daemon): key and label both drawn dim.
+    pub disabled: bool,
 }
 
 impl<'a> KeyHint<'a> {
@@ -204,6 +207,7 @@ impl<'a> KeyHint<'a> {
             keys: keys.into(),
             label: label.into(),
             priority: 0,
+            disabled: false,
         }
     }
 
@@ -221,6 +225,12 @@ impl<'a> KeyHint<'a> {
         self
     }
 
+    /// Draw the hint dim: the key exists but does nothing here now.
+    pub fn disabled(mut self, disabled: bool) -> KeyHint<'a> {
+        self.disabled = disabled;
+        self
+    }
+
     /// Cells as drawn: keys, a space, the label.
     pub fn width(&self, glyphs: KeyGlyphs) -> usize {
         let label = if self.label.is_empty() {
@@ -232,12 +242,17 @@ impl<'a> KeyHint<'a> {
     }
 
     fn spans(&self, theme: &Theme, glyphs: KeyGlyphs) -> Vec<Span<'static>> {
+        let (key, label) = if self.disabled {
+            (theme.dim(), theme.dim())
+        } else {
+            (key_style(theme), theme.secondary())
+        };
         let mut v = vec![Span::styled(
             keys_text(&self.keys, glyphs).into_owned(),
-            key_style(theme),
+            key,
         )];
         if !self.label.is_empty() {
-            v.push(Span::styled(format!(" {}", self.label), theme.secondary()));
+            v.push(Span::styled(format!(" {}", self.label), label));
         }
         v
     }
@@ -728,6 +743,18 @@ impl Widget for &KeyHelp<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_disabled_hint_is_dim_not_a_key() {
+        let t = Theme::ansi();
+        let on = KeyHint::new("R", "reload").spans(&t, KeyGlyphs::Unicode);
+        let off = KeyHint::new("R", "reload")
+            .disabled(true)
+            .spans(&t, KeyGlyphs::Unicode);
+        assert_ne!(on[0].style, off[0].style);
+        assert_eq!(off[0].style, t.dim());
+        assert_eq!(off[1].style, t.dim());
+    }
     use crate::snapshot;
     use ratatui::style::Color;
     use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
