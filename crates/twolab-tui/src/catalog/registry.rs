@@ -2,13 +2,20 @@ use super::ComponentDoc;
 use crate::widgets;
 
 /// Sidebar order: agent first, then data, input, primitives.
+#[rustfmt::skip]
 pub const ORDER: &[&str] = &[
     // Input
-    "tabs", // Primitives
+    "tabs",
+    "menu",
+    // Primitives
     "spinner",
 ];
 
-static DOCS: &[&ComponentDoc] = &[&widgets::spinner::docs::DOC, &widgets::tabs::docs::DOC];
+static DOCS: &[&ComponentDoc] = &[
+    &widgets::menu::docs::DOC,
+    &widgets::spinner::docs::DOC,
+    &widgets::tabs::docs::DOC,
+];
 
 /// Every component's doc, in [`ORDER`].
 pub fn docs() -> Vec<&'static ComponentDoc> {
