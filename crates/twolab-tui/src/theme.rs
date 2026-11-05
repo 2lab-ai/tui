@@ -110,7 +110,9 @@ impl Theme {
             border: Color::DarkGray,
             accent: Color::Cyan,
             surface_raised: Color::Reset,
-            run: Color::Cyan,
+            // Not Cyan: accent already is, and a running state must not read
+            // as "the thing to look at" (json-view keys vs keywords collided).
+            run: Color::LightBlue,
             wait: Color::Yellow,
             done: Color::Green,
             fail: Color::Red,
