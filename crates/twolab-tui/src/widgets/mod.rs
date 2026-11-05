@@ -3,4 +3,5 @@
 
 /// The catalog page for [`crate::render`]; no widget type of its own.
 pub(crate) mod layout;
+pub mod select_list;
 pub mod spinner;
