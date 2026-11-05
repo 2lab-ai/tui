@@ -63,11 +63,13 @@ pub fn take_cells(s: &str, max: usize) -> (&str, usize) {
 /// `s` clipped to at most `max` cells, ending in `…` when anything was cut.
 /// `max == 0` gives the empty string.
 pub fn truncate(s: &str, max: usize) -> Cow<'_, str> {
-    if width(s) <= max {
-        return Cow::Borrowed(s);
-    }
+    // A zero budget is empty even for zero-width text (a lone ZWJ), so a
+    // caller that pads to `max` never gets a stray invisible scalar.
     if max == 0 {
         return Cow::Borrowed("");
+    }
+    if width(s) <= max {
+        return Cow::Borrowed(s);
     }
     let (prefix, _) = take_cells(s, max - 1);
     let mut out = String::with_capacity(prefix.len() + 3);
@@ -250,6 +252,8 @@ mod tests {
         assert_eq!(truncate("한글입니다", 5), "한글…");
         assert_eq!(truncate("한글입니다", 4), "한…");
         assert_eq!(truncate("abc", 0), "");
+        assert_eq!(truncate("", 0), "");
+        assert_eq!(truncate("\u{200d}", 0), "", "zero budget is empty even for zero-width text");
         assert_eq!(truncate("❤\u{fe0f}❤\u{fe0f}❤\u{fe0f}", 4), "❤\u{fe0f}…");
         for max in 0..12 {
             assert!(
