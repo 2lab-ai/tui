@@ -41,3 +41,8 @@ codex-rs/tui/src/render/mod.rs → crates/twolab-tui/src/render/mod.rs (Apache-2
 codex-rs/tui/src/pager_overlay/scrolling.rs → crates/twolab-tui/src/render/scrolling.rs (Apache-2.0, OpenAI, modified)
 codex-rs/tui/src/pager_overlay/scrolling_tests.rs → crates/twolab-tui/src/render/scrolling.rs (Apache-2.0, OpenAI, modified)
 codex-rs/tui/src/bottom_pane/scroll_state.rs → crates/twolab-tui/src/scroll.rs (Apache-2.0, OpenAI, modified)
+fx src/ui/footer/row_text.zig -> crates/twolab-tui/src/widgets/rule/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+fx src/ui/approval_screen.zig -> crates/twolab-tui/src/widgets/rule/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+fx src/ui/render.zig -> crates/twolab-tui/src/widgets/status_bar/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+fx src/ui/footer/input_presentation.zig -> crates/twolab-tui/src/widgets/status_bar/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+xfx src/tui/hint.rs -> crates/twolab-tui/src/widgets/status_bar/mod.rs (Apache-2.0, 2lab)
