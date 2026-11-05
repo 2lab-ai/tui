@@ -3,6 +3,7 @@
 
 #[path = "gradient-text/mod.rs"]
 pub mod gradient_text;
+pub mod ledger;
 pub mod meter;
 #[path = "mini-bar/mod.rs"]
 pub mod mini_bar;
