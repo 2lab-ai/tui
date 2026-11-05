@@ -78,3 +78,8 @@ fx src/ui/footer/input_presentation.zig -> crates/twolab-tui/src/widgets/choice_
 xfx src/tui/question.rs -> crates/twolab-tui/src/widgets/choice_form/mod.rs (Apache-2.0, 2lab)
 xfx src/tui/freeform.rs -> crates/twolab-tui/src/widgets/choice_form/mod.rs (Apache-2.0, 2lab)
 codex-rs/tui/src/pager_overlay.rs → crates/twolab-tui/src/widgets/pager/mod.rs, crates/twolab-tui/src/render/renderable.rs (CachedRenderable) (Apache-2.0, OpenAI, modified)
+fx src/ui/input/visual_layout.zig -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+fx src/ui/footer/input_presentation.zig -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+fx src/ui/input/shortcuts.zig -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+xfx src/tui/wrap.rs -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, 2lab)
+xfx src/tui/editor.rs -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, 2lab)
