@@ -7,12 +7,15 @@ pub const ORDER: &[&str] = &[
     "approval-card",
     // Data
     "diff-view",
+    // Input
+    "choice-form",
     // Primitives
     "spinner",
 ];
 
 static DOCS: &[&ComponentDoc] = &[
     &widgets::approval_card::docs::DOC,
+    &widgets::choice_form::docs::DOC,
     &widgets::diff_view::docs::DOC,
     &widgets::spinner::docs::DOC,
 ];
