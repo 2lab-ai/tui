@@ -71,7 +71,13 @@ impl JsonStyles {
 /// string across lines, so a per-line pass is lossless. The scan is
 /// byte-based but only ever splits at ASCII bytes, so it is char-safe.
 pub fn json_line(line: &str, theme: &Theme) -> Line<'static> {
-    let st = JsonStyles::new(theme);
+    json_line_with(line, &JsonStyles::new(theme))
+}
+
+/// [`json_line`] with styles of the host's own (a dashboard keeping the
+/// colours its users know).
+pub fn json_line_with(line: &str, st: &JsonStyles) -> Line<'static> {
+    let st = *st;
     let bytes = line.as_bytes();
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut i = 0;
