@@ -78,7 +78,7 @@ What it does well, and what became library rules:
 - No layout jitter. Widths are measured on the widest form a value can take (for example the longest countdown), so the layout only moves on events, not on clock ticks.
 - Never cut silently. Titles say `+N more` or `N–M of T` when rows do not fit.
 - Honest empties. Unknown values show `—`, never a made-up `0`.
-- Animation glyphs are braille and block elements only. Both are East-Asian Narrow, so a spinner never pushes a Korean or Japanese table out of line.
+- Animation glyphs were meant to stay one cell wide on a Korean or Japanese terminal. Braille does; most block elements do not (see below).
 - Animation is a pure function of one shared tick, so every spinner on screen moves together and tests can pin a frame.
 
 What the extraction found and fixed:
@@ -87,7 +87,8 @@ What the extraction found and fixed:
 - Truncation re-measured the whole string for every character it removed. The library's `text::truncate` is linear.
 - The gradient text split by `char`, so an emoji sequence got one colour per code point. The library splits by grapheme.
 - The footer ignored the terminal width and was clipped. The key-hint widget drops low-priority hints first and says how many it dropped.
-- Window-state markers (`● ○ ◑`) were East-Asian Ambiguous glyphs, against llmux's own narrow-glyph rule.
+- Three of the six spinner families (the cooldown clock, the active pulse and the filling-up breath) used block elements such as `▌ ▀ ▄ ▂ █ ▒ ▓`. llmux's comment and test said the whole block-elements range is East-Asian Narrow; it is not — those glyphs are Ambiguous, so a terminal set to draw ambiguous glyphs wide (common with CJK locales) gave them two cells. The test only checked the code-point range. The library draws those three families in braille with the same motion, and its test checks `width_cjk() == 1`.
+- Window-state markers (`● ○ ◑`) are also Ambiguous glyphs, against llmux's own narrow-glyph rule.
 - About 300 styles were built inline from named colours, with three different "selected" styles. The library has one theme.
 
 ### OpenAI Codex
@@ -131,7 +132,7 @@ These are enforced by the catalog's contract test, which renders every demo at s
 - Colour comes from a theme with the same token names as `@2lab.ai/ui`. The default theme uses the 16 named colours, so the user's terminal palette decides the hues and light or dark both work.
 - No colour means no colour. Under `NO_COLOR` every cell keeps the terminal default, and meaning moves to bold, dim, reversed and glyphs. The test fails if any demo draws a coloured cell in this theme.
 - Width is counted in terminal cells by grapheme, the unit ratatui renders. Clipped text ends in `…` and never splits a grapheme.
-- Animated glyphs are East-Asian Narrow.
+- Animated glyphs stay one cell wide even where a terminal draws East-Asian Ambiguous glyphs wide; the tests check `width_cjk() == 1`.
 - Reduced motion holds one still frame that still says the same thing. Clocks keep counting: reduced motion stops movement, not information.
 - Never cut silently, and show `—` for unknown.
 - Every demo is deterministic for a given size, theme and time.

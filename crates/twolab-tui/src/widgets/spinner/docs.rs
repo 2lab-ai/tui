@@ -100,7 +100,7 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
     name: "Spinner",
     ty: "twolab_tui::spinner::Spinner",
     summary: "That something is in progress — and, by its family, which kind of progress.",
-    description: "Six one-cell animations, each for one state, so a column of rows says working, waiting, idle and filling up at a glance. Glyphs are braille and block elements only: both are East-Asian Narrow, so a spinner never pushes a table out of line on a CJK terminal. Drive it with one shared tick or with elapsed time; reduced motion holds the first glyph.",
+    description: "Six one-cell animations, each for one state, so a column of rows says working, waiting, idle and filling up at a glance. Glyphs are braille and the four quadrant blocks only — one cell wide even on a terminal that draws ambiguous-width glyphs wide (the CJK setting), so a spinner never pushes a table out of line there. Drive it with one shared tick or with elapsed time; reduced motion holds the first glyph.",
     used_in: "llmux dashboard: in-flight requests (braille for Claude, block for Codex), the current account's pulse, cooldown clocks, accounts filling up.",
     source: Source {
         project: "llmux",
@@ -145,7 +145,7 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
     a11y: &[
         "Reduced motion (Theme::with_motion(Motion::Reduced)) holds each family on its first glyph.",
         "Never the only signal: put a word beside it (\"2 in flight\", \"resets in 1h\").",
-        "One column wide on every terminal, CJK included (East-Asian Narrow glyphs only).",
+        "One cell wide on every terminal, including one that draws East-Asian Ambiguous glyphs wide (checked with width_cjk in the tests).",
     ],
     usage: USAGE,
     demos: &[

@@ -5,10 +5,15 @@
 //! working Codex request (block), a cooldown (half-block clock), the active
 //! account (pulse), an idle account (drift), an account filling up (shade).
 //!
-//! Every glyph is braille (U+2800–28FF) or a block element (U+2580–259F).
-//! Both blocks are East-Asian *Narrow*, so a spinner stays one column wide on a
-//! Korean, Japanese or Chinese terminal; geometric shapes (◐ ● ○) are
-//! *Ambiguous* and would push a table out of line there.
+//! Every glyph is braille (U+2800–28FF) or one of the four quadrant blocks
+//! (`▖ ▘ ▝ ▗`) — glyphs that stay one cell wide even on a terminal that draws
+//! East-Asian *Ambiguous* glyphs wide (the CJK setting). llmux claimed this
+//! for every block element, but most of them (`▌ ▀ ▄ █ ▒ ▓` and the eighth
+//! blocks `▂ … ▆`) are Ambiguous and take two cells there; its clock, pulse
+//! and breathe families used them. Those three are braille here, with the
+//! same motion: a sweep around the cell, a bar that fills from the bottom, a
+//! density that rises and falls. The test checks `width_cjk() == 1`, not a
+//! code-point range.
 
 #[cfg(feature = "catalog")]
 pub(crate) mod docs;
@@ -57,10 +62,13 @@ impl SpinnerKind {
         match self {
             SpinnerKind::Braille => &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
             SpinnerKind::Block => &['▖', '▘', '▝', '▗'],
-            SpinnerKind::Clock => &['▌', '▀', '▐', '▄'],
-            SpinnerKind::Pulse => &['▂', '▃', '▄', '▅', '▆', '▅', '▄', '▃'],
+            // Left column, top row, right column, bottom row.
+            SpinnerKind::Clock => &['⡇', '⠉', '⢸', '⣀'],
+            // A bar filling from the bottom and ebbing.
+            SpinnerKind::Pulse => &['⣀', '⣤', '⣶', '⣿', '⣶', '⣤'],
             SpinnerKind::Drift => &['⠁', '⠂', '⠄', '⠂'],
-            SpinnerKind::Breathe => &['░', '▒', '▓', '█', '▓', '▒'],
+            // Dot density rising and falling: 1, 2, 4, 6, 4, 2 dots.
+            SpinnerKind::Breathe => &['⠂', '⠅', '⠭', '⠿', '⠭', '⠅'],
         }
     }
 
@@ -200,15 +208,42 @@ mod tests {
         assert_ne!(SpinnerKind::Pulse.glyph(0), SpinnerKind::Pulse.glyph(2));
     }
 
+    /// One cell wide everywhere — including a terminal that draws East-Asian
+    /// Ambiguous glyphs wide. A code-point range check is not enough: `▌`,
+    /// `▀`, `█` and the eighth blocks sit in the block-elements range but
+    /// are Ambiguous.
     #[test]
-    fn every_glyph_is_east_asian_narrow() {
-        let narrow = |c: char| {
-            let u = c as u32;
-            (0x2800..=0x28FF).contains(&u) || (0x2580..=0x259F).contains(&u)
-        };
+    fn every_glyph_is_one_cell_even_on_a_cjk_terminal() {
+        use unicode_width::UnicodeWidthChar;
         for k in SpinnerKind::ALL {
             for &g in k.frames() {
-                assert!(narrow(g), "{} {g:?} U+{:04X}", k.name(), g as u32);
+                assert_eq!(g.width(), Some(1), "{} {g:?}", k.name());
+                assert_eq!(
+                    g.width_cjk(),
+                    Some(1),
+                    "{} {g:?} U+{:04X} is ambiguous-width",
+                    k.name(),
+                    g as u32
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn families_are_distinct_at_every_frame() {
+        for f in 0..24 {
+            let glyphs: Vec<char> = SpinnerKind::ALL.iter().map(|k| k.glyph(f)).collect();
+            for (i, a) in glyphs.iter().enumerate() {
+                for b in &glyphs[i + 1..] {
+                    // Pulse and breathe may share a full cell at their peak;
+                    // the working pair must never collide.
+                    if *a == *b {
+                        assert!(!matches!(
+                            *a,
+                            '⠋' | '⠙' | '⠹' | '⠸' | '⠼' | '⠴' | '⠦' | '⠧' | '⠇' | '⠏'
+                        ));
+                    }
+                }
             }
         }
     }

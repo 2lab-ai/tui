@@ -38,8 +38,10 @@ npm run build:site                # builds the wasm module (rustup toolchain) + 
   (bold, dim, reversed) and glyphs.
 - **Cells, not chars.** Measure with `text::width`, clip with `text::truncate` / `text::truncate_line`, pad with
   `text::pad`. Hit rects and column widths are cell widths.
-- **Animated glyphs are East-Asian Narrow**: braille (U+2800–28FF) and block elements (U+2580–259F). Ambiguous-width
-  glyphs (`● ○ ◑ • …`) shift CJK tables; use them only where a host opts in.
+- **Animated glyphs stay one cell on a CJK terminal**: check `width_cjk() == 1`, not a code-point range. Braille
+  (U+2800–28FF) and the quadrant blocks `▖ ▗ ▘ ▝ ▐ ░` qualify; most block elements (`▌ ▀ ▄ █ ▒ ▓`, the eighth
+  blocks `▂ … ▆`) and `● ○ ◑ • · — … │ ─ ← → ↑ ↓` are East-Asian Ambiguous and take two cells there. Use those only
+  where a host opts in, or where the widget is not a glyph-per-state marker (a bar, a rule).
 - **Reduced motion** (`theme.reduced_motion()`): hold one still frame that says the same thing. Clocks still count.
 - **Never cut silently**: when rows or text are dropped, say so (`+N more`, `…`). **Honest empties**: `—` for unknown,
   never a made-up `0`.
