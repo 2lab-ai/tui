@@ -16,6 +16,7 @@
 //!   unit ratatui renders.
 //! - Animated widgets hold a still frame under [`Motion::Reduced`].
 
+pub mod color;
 pub mod input;
 pub mod snapshot;
 pub mod text;

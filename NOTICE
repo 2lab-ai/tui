@@ -2,3 +2,20 @@ twolab-tui
 Copyright 2026 2lab.ai
 
 (sources listed below)
+
+This product includes software derived from OpenAI Codex
+(https://github.com/openai/codex, commit e7f32cf1928a35a9232a633a51c2a03b5a7e2c72),
+licensed under the Apache License 2.0. Its NOTICE reads:
+
+  OpenAI Codex
+  Copyright 2025 OpenAI
+
+  This project includes code derived from [Ratatui](https://github.com/ratatui/ratatui), licensed under the MIT license.
+  Copyright (c) 2016-2022 Florian Dehau
+  Copyright (c) 2023-2025 The Ratatui Developers
+
+Files derived from OpenAI Codex (upstream path → path here):
+codex-rs/tui/src/color.rs → crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/terminal_palette.rs → crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/terminal_probe.rs → crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/style/contrast.rs → crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
