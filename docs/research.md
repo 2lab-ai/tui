@@ -22,7 +22,7 @@ Read sections 1 and 5 if you only want the decisions. Read section 4 before you 
 - ratatui 0.30 ships 17 primitives but no spinner, shimmer, key hints, toast, command palette, text input, scroll view, diff, markdown, status bar or modal. Community crates exist for most of these, but they are small, young, and share no theme, motion or focus model.
 - The three apps we studied had already solved most of these, each in its own way. llmux had quota meters, spinners and tabs; Codex had shimmer, key hints, pickers and a pager; fx had the approval band, the question form, the diff view and the composer.
 - The library's value is the shared rules, not any one widget: time is an input, colour comes from a theme, width is measured in cells, motion can be turned off, and nothing is cut without saying so.
-- The catalog compiles the crate itself to WebAssembly (about 155 KB before compression, no imports) and paints each demo's cells in the page. What you see on the site is the Rust code, not a recording.
+- The catalog compiles the crate itself to WebAssembly (about 750 KB, 280 KB compressed, for 27 widgets and 85 demos, no imports) and paints each demo's cells in the page. What you see on the site is the Rust code, not a recording.
 - The crate is Apache-2.0, because the Codex and fx code it carries can only be offered under Apache terms.
 
 ## What terminal UI libraries already offer
@@ -156,7 +156,11 @@ How it works:
 4. Text enters the page as text nodes only. Nothing a widget draws is parsed as HTML.
 5. The page passes the time in. `Instant::now()` panics in this target; a Rust panic is caught and shown as a message instead of a broken page.
 
-The module is about 155 KB (58 KB compressed) with one widget and grows with each widget's demos; it has no imports and loads in Node for tests.
+The module is about 750 KB (280 KB compressed) with 27 widgets and their 85 demos — the research estimate of 90 to 150 KB compressed was for the widgets alone; the demo data and the docs text roughly double it. It has no imports and loads in Node, where the site's tests render every demo through it in all four themes.
+
+A panicking demo is contained. With `panic = "abort"` a Rust panic traps the call; the renderer takes a demo out of its slot before running it, so a trap leaves no open borrow and the other demos on the page keep working. The page shows the panic message where the demo was.
+
+Text input goes through an invisible, labelled text field over the terminal, so Korean, Japanese and Chinese typing (which needs IME composition) reaches interactive demos. Tab moves on unless the demo uses it, and an Esc the demo does not use leaves, so the terminal is never a keyboard trap.
 
 ## Licensing
 
@@ -165,9 +169,58 @@ The module is about 155 KB (58 KB compressed) with one widget and grows with eac
 - llmux code is 2lab's own (MIT); its licence text is kept in `licenses/llmux.LICENSE`.
 - No upstream branding is copied: no Codex or fx logos, product colour names or bundled themes.
 
+## Measuring like ratatui, and a ratatui wrap bug
+
+The first draft of `text::width` measured a whole string with `unicode-width`, as llmux did. The review found it disagreeing with the buffer ratatui fills: ratatui measures grapheme by grapheme with its own `CellWidth` (which counts a halfwidth katakana sound mark as a cell) and drops any grapheme with a control character. A random sample of 270,000 CJK and emoji strings gave 4,190 under-counts. The library now measures exactly as ratatui draws, and its row count is ratatui's own (`Paragraph::line_count`), so a scroll limit reaches the last line exactly.
+
+The same review found a bug in ratatui 0.30 itself: its word wrapper can emit a row wider than the area. A two-cell ideographic space (U+3000, the ordinary space in CJK text) at the end of a row makes the render write outside the buffer and panic (`" \u{3000}b"` at width 2), and at odd widths a two-cell glyph can straddle the edge (`가가가` at width 3 draws two rows, the second overflowing). `text::wrap_safe` turns wide breakable spaces into that many ASCII spaces before wrapping, which removes the panic; the straddling glyph remains an upstream issue to report.
+
 ## What we took, and from where
 
-The [sources and licences](/tui/docs/licences) page lists every widget with its upstream file, licence and whether it was ported (code carried over and adapted) or studied (behaviour re-written).
+27 widgets, each with at least three demos. The [sources and licences](/tui/docs/licences) page links each one to its upstream file.
+
+| Group | Widget | From | What it tells the person |
+|---|---|---|---|
+| Agent | Working | Codex | What the agent is doing now, for how long, and which key stops it |
+| Agent | Shimmer | Codex | That a label is live — work behind it is still in progress |
+| Agent | Status bar | fx | Mode, model, how full the context is, and what you just armed |
+| Agent | Approval card | fx | What the agent wants to do, how risky it is, and your options |
+| Agent | Banner and flash | llmux | Something is on until a deadline; whether the last action worked |
+| Data | Meter | llmux | How much of a quota window is used or left and when it resets |
+| Data | Mini bar | llmux | A row's share of the biggest one |
+| Data | Ledger amount | llmux | Money lined up on the decimal point |
+| Data | Status card | Codex | An account at a glance: facts and usage bars |
+| Data | Trend chart | llmux | How each series moved day by day, with gaps where there is no data |
+| Data | Packed grid | llmux | Many short records on few lines, fields aligned |
+| Data | Fact table | fx | Numbers aligned in as many columns as fit |
+| Data | JSON view | llmux | JSON coloured, wrapped and scrollable |
+| Data | Diff view | fx | What changed, line by line, and how much |
+| Input | Composer | fx | What you will send next |
+| Input | Choice form | fx | A question with numbered options and a free-text answer |
+| Input | Select list | Codex | Which one to use, and which is in effect now |
+| Input | Multi-select | Codex | Which of these to include, with fuzzy filtering |
+| Input | Completion menu | fx | The commands matching what you typed |
+| Input | Key hints | Codex | Which keys do something here, fitted to the width |
+| Input | Tabs | llmux | Which view you are on and how to get to the others |
+| Input | Menu | llmux | What you can do to this thing, where you clicked |
+| Primitives | Layout | Codex | Who gets the rows when there are not enough |
+| Primitives | Pager | Codex | The whole text, and where you are in it |
+| Primitives | Rule | fx | Where a band or section starts |
+| Primitives | Spinner | llmux | That something is in progress, and which kind |
+| Primitives | Gradient text | llmux | That a name is special |
+
+Modules under the widgets: `text` (cells), `theme` (tokens, `decolor` for `NO_COLOR` hosts), `color` (blend, contrast, 256 and 16-colour fallback, from Codex), `format` (durations, counts, money, from llmux), `render` (Codex's measure-then-paint composition), `scroll`, `hit`, `osc52` (clipboard escape with tmux and screen passthrough), `snapshot` (buffer to text and styled runs).
+
+## What llmux gained
+
+llmux now depends on the crate and dropped its own copies:
+
+- text cells, wrapping and the spinner families come from the crate; the char-count truncators that shifted rows holding Korean names are gone
+- the tab strip, the animated model names, the raw viewer's JSON colours and every plain key bar are crate widgets
+- the key bar fits the width: whole hints drop, least important first, with `… +N more`, instead of the terminal cutting a hint mid-word
+- `NO_COLOR` is honoured: no cell is coloured, weight stays, red turns bold
+- copying from the raw viewer works inside tmux and GNU screen
+- the cooldown, pulse and filling-up spinners stay one cell wide on CJK terminals
 
 ## What we left out, and why
 
