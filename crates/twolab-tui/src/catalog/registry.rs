@@ -1,12 +1,34 @@
 use super::ComponentDoc;
 use crate::widgets;
 
-/// Sidebar order: agent first, then data, input, primitives.
-pub const ORDER: &[&str] = &["meter", "mini-bar", "spinner", "gradient-text"];
+/// Sidebar order: Agent, then Data, Input and Primitives (generated from the
+/// widget folders; within a group the lead widgets first).
+pub const ORDER: &[&str] = &[
+    "working",
+    "shimmer",
+    "status-bar",
+    "meter",
+    "mini-bar",
+    "diff-view",
+    "tabs",
+    "menu",
+    "layout",
+    "rule",
+    "spinner",
+    "gradient-text",
+];
 
 static DOCS: &[&ComponentDoc] = &[
+    &widgets::working::docs::DOC,
+    &widgets::shimmer::docs::DOC,
+    &widgets::status_bar::docs::DOC,
     &widgets::meter::docs::DOC,
     &widgets::mini_bar::docs::DOC,
+    &widgets::diff_view::docs::DOC,
+    &widgets::tabs::docs::DOC,
+    &widgets::menu::docs::DOC,
+    &widgets::layout::docs::DOC,
+    &widgets::rule::docs::DOC,
     &widgets::spinner::docs::DOC,
     &widgets::gradient_text::docs::DOC,
 ];
