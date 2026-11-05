@@ -322,7 +322,8 @@ function componentPage(c: CompDoc): string {
     </div>
     <div class="pv-stage term-stage" id="stage" data-bg="${view.bg}">
       <div class="term-win"><div class="term-title"><i></i><i></i><i></i><span id="term-label"></span></div>
-      <pre class="term" id="term" tabindex="0" aria-label="Live terminal preview"></pre></div>
+      <pre class="term" id="term" tabindex="-1" aria-hidden="false" aria-label="Live terminal preview"></pre>
+      <textarea id="term-input" class="term-input" aria-label="Keys for the live terminal preview" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" rows="1"></textarea></div>
     </div>
     <div class="pv-note" id="note"></div>
   </section>
@@ -606,8 +607,8 @@ document.addEventListener('click', (e) => {
 /** Keys go to the stage's demo while the terminal has focus. Tab leaves the terminal unless the demo takes it. */
 document.addEventListener('keydown', (e) => {
   const el = document.activeElement;
-  if (!current || !el || el.id !== 'term' || !current.demo.interactive) return;
-  const t = terms.find((x) => x.el === el);
+  if (!current || !el || el.id !== 'term-input' || !current.demo.interactive) return;
+  const t = stageTerm();
   if (!t) return;
   if (e.key === 'Tab' && !current.comp.keyboard.some(([k]) => /tab/i.test(k))) return;
   // Korean, Japanese and Chinese input: wait for the committed text, never send a half-composed syllable.
@@ -626,6 +627,55 @@ document.addEventListener('keydown', (e) => {
   )
     e.preventDefault();
   if (changed) draw(t, performance.now());
+});
+
+/** The stage's terminal (the one the keys go to). */
+function stageTerm(): Term | undefined {
+  const pre = document.getElementById('term');
+  return terms.find((x) => x.el === pre);
+}
+
+/**
+ * Text input goes through a hidden textarea over the terminal: a `<pre>` gets no IME composition, so Korean,
+ * Japanese and Chinese input would never arrive. Keys are forwarded on keydown; a composed syllable is sent
+ * when the IME commits it.
+ */
+document.addEventListener('compositionend', (e) => {
+  const input = e.target as HTMLTextAreaElement;
+  if (input.id !== 'term-input' || !current?.demo.interactive) return;
+  const t = stageTerm();
+  if (!t) return;
+  let changed = false;
+  for (const ch of Array.from(e.data ?? '')) {
+    try {
+      changed = cat.key(t.handle, { key: ch, ctrlKey: false, altKey: false, shiftKey: false }) || changed;
+    } catch {
+      t.animated = false;
+      t.el.textContent = `This demo stopped: ${cat.panicMessage()}`;
+      return;
+    }
+  }
+  input.value = '';
+  if (changed) draw(t, performance.now());
+});
+document.addEventListener('input', (e) => {
+  const input = e.target as HTMLTextAreaElement;
+  if (input.id === 'term-input' && !(e as InputEvent).isComposing) input.value = '';
+});
+document.addEventListener('focusin', (e) => {
+  const el = e.target as HTMLElement;
+  if (el.id === 'term') document.getElementById('term-input')?.focus();
+  if (el.id === 'term-input') el.closest('.term-win')?.classList.add('focused');
+});
+document.addEventListener('focusout', (e) => {
+  const el = e.target as HTMLElement;
+  if (el.id === 'term-input') el.closest('.term-win')?.classList.remove('focused');
+});
+document.addEventListener('mousedown', (e) => {
+  if ((e.target as Element).closest('#term')) {
+    e.preventDefault();
+    document.getElementById('term-input')?.focus();
+  }
 });
 
 window.addEventListener('popstate', route);
