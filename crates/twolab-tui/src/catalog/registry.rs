@@ -3,13 +3,19 @@ use crate::widgets;
 
 /// Sidebar order: agent first, then data, input, primitives.
 pub const ORDER: &[&str] = &[
+    // Agent
+    "approval-card",
     // Data
     "diff-view",
     // Primitives
     "spinner",
 ];
 
-static DOCS: &[&ComponentDoc] = &[&widgets::diff_view::docs::DOC, &widgets::spinner::docs::DOC];
+static DOCS: &[&ComponentDoc] = &[
+    &widgets::approval_card::docs::DOC,
+    &widgets::diff_view::docs::DOC,
+    &widgets::spinner::docs::DOC,
+];
 
 /// Every component's doc, in [`ORDER`].
 pub fn docs() -> Vec<&'static ComponentDoc> {
