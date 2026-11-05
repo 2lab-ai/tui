@@ -218,7 +218,7 @@ llmux now depends on the crate and dropped its own copies:
 - text cells, wrapping and the spinner families come from the crate; the char-count truncators that shifted rows holding Korean names are gone
 - the tab strip, the animated model names, the raw viewer's JSON colours and every plain key bar are crate widgets
 - the key bar fits the width: whole hints drop, least important first, with `… +N more`, instead of the terminal cutting a hint mid-word
-- `NO_COLOR` is honoured: no cell is coloured, weight stays, red turns bold
+- `NO_COLOR` keeps its weight: crossterm already dropped colour codes, but its empty colour sequence (`ESC[m`) is a full reset, so bold and reverse went with them (a live 80×30 frame kept 28 of 347 bold glyphs). The frame is now decoloured before output — 372 bold glyphs — and red text turns bold
 - copying from the raw viewer works inside tmux and GNU screen
 - the cooldown, pulse and filling-up spinners stay one cell wide on CJK terminals
 
