@@ -17,6 +17,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::render::Renderable;
 use crate::scroll::ScrollState;
 use crate::text;
 use crate::theme::Theme;
@@ -453,6 +454,119 @@ pub(crate) fn picker_areas(area: Rect, sizes: PickerSizes) -> [Rect; 6] {
         y = y.saturating_add(height);
         rect
     })
+}
+
+/// Header, search line and footer sit this many cells in from the left;
+/// rows use the full width (the cursor takes the first cell).
+pub(crate) const INSET: u16 = 2;
+
+fn inset(r: Rect) -> Rect {
+    Rect {
+        x: r.x.saturating_add(INSET),
+        width: r.width.saturating_sub(INSET),
+        ..r
+    }
+}
+
+/// A picker, top to bottom: header lines, a gap, an optional search line,
+/// the rows between two overflow spacer rows, then tail lines (a note, the
+/// key-hint footer). On a short screen the tail yields first — its first
+/// lines first, so the footer goes last — then the spacers and the gap; the
+/// header, search line and selected row stay as long as they fit.
+pub(crate) struct Frame<'a> {
+    pub header: Vec<Line<'static>>,
+    pub search: Option<Line<'static>>,
+    pub rows: &'a [Row],
+    pub heights: &'a [u16],
+    pub state: &'a ScrollState,
+    pub max_rows: usize,
+    pub paint: Paint<'a>,
+    pub empty: Line<'static>,
+    pub tail: Vec<Line<'static>>,
+}
+
+impl Frame<'_> {
+    /// Rows the whole picker wants (the list at its tallest window).
+    pub(crate) fn desired_height(&self) -> u16 {
+        let header = self.header.len() as u16;
+        header
+            + u16::from(header > 0)
+            + u16::from(self.search.is_some())
+            + 2
+            + stable_lines(self.heights, self.max_rows)
+            + self.tail.len() as u16
+    }
+
+    /// Where the search line's text starts, if it is drawn.
+    pub(crate) fn search_origin(&self, area: Rect) -> Option<(u16, u16)> {
+        self.search.as_ref()?;
+        let header = self.header.len() as u16;
+        let y = area.y + header + u16::from(header > 0);
+        (y < area.bottom()).then_some((area.x + INSET, y))
+    }
+
+    pub(crate) fn render(&self, area: Rect, buf: &mut Buffer) -> Painted {
+        if area.is_empty() {
+            return Painted::default();
+        }
+        let header_h = self.header.len() as u16;
+        let search_h = u16::from(self.search.is_some());
+        let minimum = header_h.min(1) + search_h + 1;
+        let tail_h = (self.tail.len() as u16).min(area.height.saturating_sub(minimum));
+        let body = Rect {
+            height: area.height - tail_h,
+            ..area
+        };
+        let [head_a, _, search_a, above, list_a, below] = picker_areas(
+            body,
+            PickerSizes {
+                header: header_h,
+                header_gap: 1,
+                search: search_h,
+                rows: stable_lines(self.heights, self.max_rows),
+            },
+        );
+        for (y, line) in (head_a.y..head_a.bottom()).zip(&self.header) {
+            Renderable::render(line, inset(Rect::new(area.x, y, area.width, 1)), buf);
+        }
+        if let Some(search) = &self.search
+            && !search_a.is_empty()
+        {
+            Renderable::render(search, inset(search_a), buf);
+        }
+        let mut painted = Painted::default();
+        if !list_a.is_empty() {
+            if self.rows.is_empty() {
+                Renderable::render(&self.empty, inset(list_a), buf);
+            } else {
+                let start = window_start(self.heights, self.state, self.max_rows, list_a.height);
+                painted = paint_rows(
+                    list_a,
+                    buf,
+                    self.rows,
+                    self.heights,
+                    start,
+                    self.max_rows,
+                    &self.paint,
+                );
+                let position = self.state.selected_idx.map(|s| (s + 1, self.rows.len()));
+                paint_overflow(
+                    above,
+                    below,
+                    buf,
+                    painted,
+                    position,
+                    self.paint.theme,
+                    self.paint.marks,
+                );
+            }
+        }
+        let skip = self.tail.len() - tail_h as usize;
+        for (y, line) in (body.bottom()..area.bottom()).zip(self.tail.iter().skip(skip)) {
+            Renderable::render(line, inset(Rect::new(area.x, y, area.width, 1)), buf);
+        }
+        painted
+    }
 }
 
 /// A footer of key hints: keys in the accent style, labels dim.

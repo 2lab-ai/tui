@@ -34,7 +34,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 pub use rows::RowDisplay;
-use rows::{Marks, Paint, PickerSizes, Row};
+use rows::{Frame, Marks, Paint, Row};
 
 use crate::input::{Key, KeyInput};
 use crate::render::Renderable;
@@ -624,129 +624,80 @@ impl SelectList {
     }
 }
 
-/// Inner width for the header, search and footer (two cells each side).
-const INSET: u16 = 2;
-
-impl Renderable for SelectList {
-    fn desired_height(&self, width: u16) -> u16 {
+impl SelectList {
+    /// Rows, their heights and the description column at `width`.
+    fn layout(&self, width: u16) -> (Vec<Row>, Vec<u16>, usize) {
         let rows = self.build_rows();
         let col = rows::desc_col(&rows, width, self.cursor_w());
         let hs = rows::heights(&rows, col, width, self.display);
-        let header = self.header_lines().len() as u16;
-        let list = rows::stable_lines(&hs, self.max_rows);
-        let note = u16::from(col == 0 && rows.iter().any(|r| r.description_text().is_some()));
-        header + u16::from(header > 0) + u16::from(self.search_visible()) + 2 + list + note + 1
+        (rows, hs, col)
+    }
+
+    fn frame<'a>(
+        &'a self,
+        rows: &'a [Row],
+        heights: &'a [u16],
+        col: usize,
+        note: Option<String>,
+    ) -> Frame<'a> {
+        let t = &self.theme;
+        let search = self.search_visible().then(|| {
+            let label = (self.search == Search::OnDemand).then_some("/ ");
+            rows::search_line(t, label, &self.query, &self.placeholder)
+        });
+        let mut tail = Vec::new();
+        if let Some(note) = note {
+            tail.push(Line::styled(note, t.secondary()));
+        }
+        tail.push(self.footer_line());
+        Frame {
+            header: self.header_lines(),
+            search,
+            rows,
+            heights,
+            state: &self.state,
+            max_rows: self.max_rows,
+            paint: Paint {
+                theme: t,
+                marks: self.glyphs.marks(),
+                display: self.display,
+                desc_col: col,
+                selected: self.state.selected_idx,
+            },
+            empty: self.empty_line(),
+            tail,
+        }
+    }
+}
+
+impl Renderable for SelectList {
+    fn desired_height(&self, width: u16) -> u16 {
+        let (rows, hs, col) = self.layout(width);
+        // Reserve the note row whenever some row could need it, so moving
+        // the cursor never changes the height.
+        let note =
+            (col == 0 && rows.iter().any(|r| r.description_text().is_some())).then(String::new);
+        self.frame(&rows, &hs, col, note).desired_height()
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.shown.set(0);
-        if area.is_empty() {
-            return;
-        }
-        let t = &self.theme;
-        let rows = self.build_rows();
-        let col = rows::desc_col(&rows, area.width, self.cursor_w());
-        let hs = rows::heights(&rows, col, area.width, self.display);
+        let (rows, hs, col) = self.layout(area.width);
         let note = self.note(&rows, col);
-        let header = self.header_lines();
-        let search = u16::from(self.search_visible());
-
-        // The footer and the note yield before the title, search and the
-        // selected row.
-        let minimum = (header.len() as u16).min(1) + search + 1;
-        let mut tail = 1 + u16::from(note.is_some());
-        tail = tail.min(area.height.saturating_sub(minimum));
-        let body = Rect {
-            height: area.height - tail,
-            ..area
-        };
-        let list_lines = rows::stable_lines(&hs, self.max_rows);
-        let [head_a, _, search_a, above, list_a, below] = rows::picker_areas(
-            body,
-            PickerSizes {
-                header: header.len() as u16,
-                header_gap: 1,
-                search,
-                rows: list_lines,
-            },
-        );
-        let inset = |r: Rect| Rect {
-            x: r.x.saturating_add(INSET),
-            width: r.width.saturating_sub(INSET),
-            ..r
-        };
-        for (y, line) in (head_a.y..head_a.bottom()).zip(header) {
-            Renderable::render(
-                &line,
-                inset(Rect {
-                    y,
-                    height: 1,
-                    ..head_a
-                }),
-                buf,
-            );
-        }
-        if !search_a.is_empty() {
-            let label = (self.search == Search::OnDemand).then_some("/ ");
-            let line = rows::search_line(t, label, &self.query, &self.placeholder);
-            Renderable::render(&line, inset(search_a), buf);
-        }
-        if !list_a.is_empty() {
-            if rows.is_empty() {
-                Renderable::render(&self.empty_line(), inset(list_a), buf);
-            } else {
-                let start = rows::window_start(&hs, &self.state, self.max_rows, list_a.height);
-                let painted = rows::paint_rows(
-                    list_a,
-                    buf,
-                    &rows,
-                    &hs,
-                    start,
-                    self.max_rows,
-                    &Paint {
-                        theme: t,
-                        marks: self.glyphs.marks(),
-                        display: self.display,
-                        desc_col: col,
-                        selected: self.state.selected_idx,
-                    },
-                );
-                self.shown.set(painted.items);
-                let position = self.state.selected_idx.map(|s| (s + 1, rows.len()));
-                rows::paint_overflow(above, below, buf, painted, position, t, self.glyphs.marks());
-            }
-        }
-        let mut y = body.bottom();
-        if let Some(note) = note
-            && tail > 1
-        {
-            let line = Line::styled(note, t.secondary());
-            Renderable::render(&line, inset(Rect::new(area.x, y, area.width, 1)), buf);
-            y += 1;
-        }
-        if tail > 0 && y < area.bottom() {
-            Renderable::render(
-                &self.footer_line(),
-                inset(Rect::new(area.x, y, area.width, 1)),
-                buf,
-            );
-        }
+        let painted = self.frame(&rows, &hs, col, note).render(area, buf);
+        self.shown.set(painted.items);
     }
 
     /// After the search text, when the search line takes keys.
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        if !self.search_visible() || area.is_empty() {
-            return None;
-        }
-        let header = self.header_lines().len() as u16;
-        let y = area.y + header + u16::from(header > 0);
+        let (rows, hs, col) = self.layout(area.width);
+        let (x, y) = self.frame(&rows, &hs, col, None).search_origin(area)?;
         let label = if self.search == Search::OnDemand {
             2
         } else {
             0
         };
-        let x = area.x + INSET + label + text::width(&self.query) as u16;
-        (y < area.bottom() && x < area.right()).then_some((x, y))
+        let x = x + label + text::width(&self.query) as u16;
+        (x < area.right()).then_some((x, y))
     }
 }
 
