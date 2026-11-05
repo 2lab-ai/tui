@@ -2,6 +2,7 @@
 //! `catalog` feature, `docs.rs` (its catalog entry).
 
 pub mod completion_menu;
+pub mod fact_table;
 pub mod rule;
 pub mod spinner;
 pub mod status_bar;

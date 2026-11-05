@@ -11,3 +11,6 @@ fx src/ui/footer/picker_presentation.zig -> crates/twolab-tui/src/widgets/comple
 fx src/core/shared/list_window.zig -> crates/twolab-tui/src/widgets/completion_menu/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
 fx src/core/shared/fuzzy_match.zig -> crates/twolab-tui/src/widgets/completion_menu/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
 xfx src/tui/picker.rs -> crates/twolab-tui/src/widgets/completion_menu/mod.rs (Apache-2.0, 2lab)
+fx src/ui/footer/usage_presentation.zig -> crates/twolab-tui/src/widgets/fact_table/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+fx src/ui/footer/row_text.zig -> crates/twolab-tui/src/widgets/fact_table/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+fx src/ui/footer/info_panel_presentation.zig -> crates/twolab-tui/src/widgets/fact_table/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
