@@ -3,5 +3,6 @@
 
 pub mod approval_card;
 pub mod choice_form;
+pub mod composer;
 pub mod diff_view;
 pub mod spinner;

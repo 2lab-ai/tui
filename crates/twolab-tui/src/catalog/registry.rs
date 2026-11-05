@@ -9,6 +9,7 @@ pub const ORDER: &[&str] = &[
     "diff-view",
     // Input
     "choice-form",
+    "composer",
     // Primitives
     "spinner",
 ];
@@ -16,6 +17,7 @@ pub const ORDER: &[&str] = &[
 static DOCS: &[&ComponentDoc] = &[
     &widgets::approval_card::docs::DOC,
     &widgets::choice_form::docs::DOC,
+    &widgets::composer::docs::DOC,
     &widgets::diff_view::docs::DOC,
     &widgets::spinner::docs::DOC,
 ];
