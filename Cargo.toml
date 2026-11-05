@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/twolab-tui", "crates/catalog-wasm"]
+members = ["crates/twolab-tui", "crates/catalog-wasm", "crates/catalog-term"]
 
 [workspace.package]
 version = "0.1.0"

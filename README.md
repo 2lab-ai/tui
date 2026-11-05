@@ -34,13 +34,15 @@ The catalog's contract test checks all of these for every demo. See [AGENTS.md](
 | Path | What it is |
 |---|---|
 | `crates/twolab-tui` | The library. One folder per widget under `src/widgets/`, each with `mod.rs` (widget and tests) and `docs.rs` (its catalog entry, behind the `catalog` feature). |
-| `crates/catalog-wasm` | The catalog's renderer: every demo, compiled to `wasm32-unknown-unknown` with no imports. |
+| `crates/catalog-wasm` | The web catalog's renderer: every demo, compiled to `wasm32-unknown-unknown` with no imports. |
+| `crates/catalog-term` | `tui-catalog`: the same catalog in a terminal (crossterm). |
 | `site/` | The catalog site (Vite, base `/tui/`). |
 | `docs/research.md` | The research report shown on the site. |
 
 ```bash
+cargo run -p tui-catalog   # the catalog in your terminal: ↑↓ widget, ←→ demo, tab to try it, t theme, q quit
 cargo test --workspace     # library + catalog contract
-npm ci && npm run build:site && npx vite preview   # catalog at http://localhost:4173/tui/
+npm ci && npm run build:site && npx vite preview   # the web catalog at http://localhost:4173/tui/
 ```
 
 ## Licence
