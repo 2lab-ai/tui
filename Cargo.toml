@@ -15,7 +15,7 @@ homepage = "https://2lab.ai/tui"
 # catalog builds it for wasm32-unknown-unknown where crossterm does not compile.
 # A host that renders to a terminal (llmux) turns `crossterm` on itself, and
 # cargo unifies the features.
-ratatui = { version = "0.30.1", default-features = false, features = ["std", "layout-cache", "underline-color"] }
+ratatui = { version = "0.30.1", default-features = false, features = ["std", "layout-cache", "underline-color", "unstable-rendered-line-info"] }
 unicode-width = "0.2.2"
 unicode-segmentation = "1.13"
 

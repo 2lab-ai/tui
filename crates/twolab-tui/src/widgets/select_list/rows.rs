@@ -371,7 +371,7 @@ fn paint_row(area: Rect, buf: &mut Buffer, row: &Row, selected: bool, p: &Paint)
                 area.width.saturating_sub(col),
                 area.height,
             );
-            Paragraph::new(d)
+            Paragraph::new(text::wrap_safe(&d).into_owned())
                 .style(style(t, Part::Secondary, selected, dis))
                 .wrap(Wrap { trim: false })
                 .render(desc_area, buf);

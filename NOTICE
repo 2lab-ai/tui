@@ -6,10 +6,19 @@ This product includes software derived from OpenAI Codex
 licensed under the Apache License 2.0.
   OpenAI Codex
   Copyright 2025 OpenAI
+Codex's NOTICE also reads:
+  This project includes code derived from [Ratatui](https://github.com/ratatui/ratatui), licensed under the MIT license.
+  Copyright (c) 2016-2022 Florian Dehau
+  Copyright (c) 2023-2025 The Ratatui Developers
 
 This product includes software derived from fx
 (https://github.com/vercel-labs/fx, commit 412d841d73dd6e1b8de551022728d9c929caae17),
-Copyright 2025 Vercel, Inc., licensed under the Apache License 2.0.
+Copyright 2025 Vercel, Inc., licensed under the Apache License 2.0. fx is
+written in Zig; the files below are translations to Rust.
+
+This product includes software derived from xfx
+(https://github.com/2lab-ai/xfx, commit 93f516b537adf52db208e3a343d9229c5f3d40e2),
+Copyright 2026 2lab.ai, licensed under the Apache License 2.0.
 
 This product includes software derived from llmux
 (https://github.com/2lab-ai/llmux, commit 524b6e437fd9e67bf2d3fdd507267107291cb6ac),
@@ -18,68 +27,85 @@ licensed under the MIT License.
   Copyright (c) 2026 2lab.ai (llmux Rust port)
   (full MIT permission notice in licenses/llmux.LICENSE)
 
-2lab-ai/tui is not affiliated with or endorsed by OpenAI or Vercel.
+2lab-ai/tui is not affiliated with or endorsed by OpenAI or Vercel. Every
+derived file starts with a header naming its upstream file and saying it was
+modified.
 
-Files derived from upstream sources (upstream path -> path here):
-(sources listed below)
-licensed under the Apache License 2.0. Its NOTICE reads:
-  This project includes code derived from [Ratatui](https://github.com/ratatui/ratatui), licensed under the MIT license.
-  Copyright (c) 2016-2022 Florian Dehau
-  Copyright (c) 2023-2025 The Ratatui Developers
-Files derived from OpenAI Codex (upstream path → path here):
-codex-rs/tui/src/color.rs → crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/terminal_palette.rs → crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/terminal_probe.rs → crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/style/contrast.rs → crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/summary_shimmer.rs → crates/twolab-tui/src/widgets/shimmer/mod.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/shimmer.rs → crates/twolab-tui/src/widgets/shimmer/mod.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/status_indicator_widget.rs → crates/twolab-tui/src/widgets/working/mod.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/status_indicator_widget/timer.rs → crates/twolab-tui/src/widgets/working/mod.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/render/renderable.rs → crates/twolab-tui/src/render/renderable.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/render/renderable_tests.rs → crates/twolab-tui/src/render/renderable.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/render/mod.rs → crates/twolab-tui/src/render/mod.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/pager_overlay/scrolling.rs → crates/twolab-tui/src/render/scrolling.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/pager_overlay/scrolling_tests.rs → crates/twolab-tui/src/render/scrolling.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/bottom_pane/scroll_state.rs → crates/twolab-tui/src/scroll.rs (Apache-2.0, OpenAI, modified)
-fx src/ui/footer/row_text.zig -> crates/twolab-tui/src/widgets/rule/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-fx src/ui/approval_screen.zig -> crates/twolab-tui/src/widgets/rule/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-fx src/ui/render.zig -> crates/twolab-tui/src/widgets/status_bar/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-fx src/ui/footer/input_presentation.zig -> crates/twolab-tui/src/widgets/status_bar/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-xfx src/tui/hint.rs -> crates/twolab-tui/src/widgets/status_bar/mod.rs (Apache-2.0, 2lab)
-fx src/core/output/diff.zig -> crates/twolab-tui/src/widgets/diff_view/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-xfx src/tui/approval_view.rs -> crates/twolab-tui/src/widgets/diff_view/mod.rs (Apache-2.0, 2lab)
-codex-rs/tui/src/key_hint.rs → crates/twolab-tui/src/widgets/key_hints/mod.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/footer_hint.rs → crates/twolab-tui/src/widgets/key_hints/mod.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/shortcut_help.rs → crates/twolab-tui/src/widgets/key_hints/mod.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/status/format.rs → crates/twolab-tui/src/widgets/status_card/mod.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/status/rate_limits.rs → crates/twolab-tui/src/widgets/status_card/mod.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/status/card.rs → crates/twolab-tui/src/widgets/status_card/mod.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/bottom_pane/list_selection_view.rs → crates/twolab-tui/src/widgets/select_list/mod.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/bottom_pane/popup_consts.rs → crates/twolab-tui/src/widgets/select_list/mod.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/bottom_pane/selection_popup_common.rs → crates/twolab-tui/src/widgets/select_list/rows.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/bottom_pane/selection_row_layout.rs → crates/twolab-tui/src/widgets/select_list/rows.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/bottom_pane/selection_picker_layout.rs → crates/twolab-tui/src/widgets/select_list/rows.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/bottom_pane/picker_style.rs → crates/twolab-tui/src/widgets/select_list/rows.rs (Apache-2.0, OpenAI, modified)
-codex-rs/tui/src/bottom_pane/multi_select_picker.rs → crates/twolab-tui/src/widgets/multi_select/mod.rs (Apache-2.0, OpenAI, modified)
-codex-rs/utils/fuzzy-match/src/lib.rs → crates/twolab-tui/src/widgets/multi_select/fuzzy.rs (Apache-2.0, OpenAI, modified)
-fx src/ui/footer/picker_presentation.zig -> crates/twolab-tui/src/widgets/completion_menu/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-fx src/core/shared/list_window.zig -> crates/twolab-tui/src/widgets/completion_menu/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-fx src/core/shared/fuzzy_match.zig -> crates/twolab-tui/src/widgets/completion_menu/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-xfx src/tui/picker.rs -> crates/twolab-tui/src/widgets/completion_menu/mod.rs (Apache-2.0, 2lab)
-fx src/ui/footer/usage_presentation.zig -> crates/twolab-tui/src/widgets/fact_table/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-fx src/ui/footer/row_text.zig -> crates/twolab-tui/src/widgets/fact_table/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-fx src/ui/footer/info_panel_presentation.zig -> crates/twolab-tui/src/widgets/fact_table/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-fx src/ui/footer/approval_ui.zig -> crates/twolab-tui/src/widgets/approval_card/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-fx src/ui/footer/interaction_state.zig -> crates/twolab-tui/src/widgets/approval_card/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-xfx src/tui/approval_view.rs -> crates/twolab-tui/src/widgets/approval_card/mod.rs (Apache-2.0, 2lab)
-fx src/ui/footer/question_ui.zig -> crates/twolab-tui/src/widgets/choice_form/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-fx src/ui/footer/question_freeform_layout.zig -> crates/twolab-tui/src/widgets/choice_form/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-fx src/ui/footer/input_presentation.zig -> crates/twolab-tui/src/widgets/choice_form/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-xfx src/tui/question.rs -> crates/twolab-tui/src/widgets/choice_form/mod.rs (Apache-2.0, 2lab)
-xfx src/tui/freeform.rs -> crates/twolab-tui/src/widgets/choice_form/mod.rs (Apache-2.0, 2lab)
-codex-rs/tui/src/pager_overlay.rs → crates/twolab-tui/src/widgets/pager/mod.rs, crates/twolab-tui/src/render/renderable.rs (CachedRenderable) (Apache-2.0, OpenAI, modified)
-fx src/ui/input/visual_layout.zig -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-fx src/ui/footer/input_presentation.zig -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-fx src/ui/input/shortcuts.zig -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
-xfx src/tui/wrap.rs -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, 2lab)
-xfx src/tui/editor.rs -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, 2lab)
+Files derived from OpenAI Codex (upstream path -> path here):
+  codex-rs/tui/src/bottom_pane/list_selection_view.rs -> crates/twolab-tui/src/widgets/select_list/mod.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/bottom_pane/multi_select_picker.rs -> crates/twolab-tui/src/widgets/multi_select/mod.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/bottom_pane/picker_style.rs -> crates/twolab-tui/src/widgets/select_list/rows.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/bottom_pane/popup_consts.rs -> crates/twolab-tui/src/widgets/select_list/mod.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/bottom_pane/scroll_state.rs -> crates/twolab-tui/src/scroll.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/bottom_pane/selection_picker_layout.rs -> crates/twolab-tui/src/widgets/select_list/rows.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/bottom_pane/selection_popup_common.rs -> crates/twolab-tui/src/widgets/select_list/rows.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/bottom_pane/selection_row_layout.rs -> crates/twolab-tui/src/widgets/select_list/rows.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/color.rs -> crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/footer_hint.rs -> crates/twolab-tui/src/widgets/key_hints/mod.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/key_hint.rs -> crates/twolab-tui/src/widgets/key_hints/mod.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/pager_overlay.rs -> crates/twolab-tui/src/widgets/pager/mod.rs, crates/twolab-tui/src/render/renderable.rs (CachedRenderable) (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/pager_overlay/scrolling.rs -> crates/twolab-tui/src/render/scrolling.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/pager_overlay/scrolling_tests.rs -> crates/twolab-tui/src/render/scrolling.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/render/mod.rs -> crates/twolab-tui/src/render/mod.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/render/renderable.rs -> crates/twolab-tui/src/render/renderable.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/render/renderable_tests.rs -> crates/twolab-tui/src/render/renderable.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/shimmer.rs -> crates/twolab-tui/src/widgets/shimmer/mod.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/shortcut_help.rs -> crates/twolab-tui/src/widgets/key_hints/mod.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/status/card.rs -> crates/twolab-tui/src/widgets/status_card/mod.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/status/format.rs -> crates/twolab-tui/src/widgets/status_card/mod.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/status/rate_limits.rs -> crates/twolab-tui/src/widgets/status_card/mod.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/status_indicator_widget.rs -> crates/twolab-tui/src/widgets/working/mod.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/status_indicator_widget/timer.rs -> crates/twolab-tui/src/widgets/working/mod.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/style/contrast.rs -> crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/summary_shimmer.rs -> crates/twolab-tui/src/widgets/shimmer/mod.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/terminal_palette.rs -> crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/tui/src/terminal_probe.rs -> crates/twolab-tui/src/color.rs (Apache-2.0, OpenAI, modified)
+  codex-rs/utils/fuzzy-match/src/lib.rs -> crates/twolab-tui/src/widgets/multi_select/fuzzy.rs (Apache-2.0, OpenAI, modified)
+
+Files derived from Vercel fx (upstream path -> path here):
+  src/core/output/diff.zig -> crates/twolab-tui/src/widgets/diff_view/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/core/shared/fuzzy_match.zig -> crates/twolab-tui/src/widgets/completion_menu/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/core/shared/list_window.zig -> crates/twolab-tui/src/widgets/completion_menu/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/approval_screen.zig -> crates/twolab-tui/src/widgets/rule/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/footer/approval_ui.zig -> crates/twolab-tui/src/widgets/approval_card/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/footer/info_panel_presentation.zig -> crates/twolab-tui/src/widgets/fact_table/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/footer/input_presentation.zig -> crates/twolab-tui/src/widgets/choice_form/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/footer/input_presentation.zig -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/footer/input_presentation.zig -> crates/twolab-tui/src/widgets/status_bar/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/footer/interaction_state.zig -> crates/twolab-tui/src/widgets/approval_card/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/footer/picker_presentation.zig -> crates/twolab-tui/src/widgets/completion_menu/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/footer/question_freeform_layout.zig -> crates/twolab-tui/src/widgets/choice_form/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/footer/question_ui.zig -> crates/twolab-tui/src/widgets/choice_form/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/footer/row_text.zig -> crates/twolab-tui/src/widgets/fact_table/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/footer/row_text.zig -> crates/twolab-tui/src/widgets/rule/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/footer/usage_presentation.zig -> crates/twolab-tui/src/widgets/fact_table/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/input/shortcuts.zig -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/input/visual_layout.zig -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+  src/ui/render.zig -> crates/twolab-tui/src/widgets/status_bar/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+
+Logic lifted from xfx, 2lab's Rust port of fx (upstream path -> path here):
+  src/tui/approval_view.rs -> crates/twolab-tui/src/widgets/approval_card/mod.rs (Apache-2.0, 2lab)
+  src/tui/approval_view.rs -> crates/twolab-tui/src/widgets/diff_view/mod.rs (Apache-2.0, 2lab)
+  src/tui/editor.rs -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, 2lab)
+  src/tui/freeform.rs -> crates/twolab-tui/src/widgets/choice_form/mod.rs (Apache-2.0, 2lab)
+  src/tui/hint.rs -> crates/twolab-tui/src/widgets/status_bar/mod.rs (Apache-2.0, 2lab)
+  src/tui/picker.rs -> crates/twolab-tui/src/widgets/completion_menu/mod.rs (Apache-2.0, 2lab)
+  src/tui/question.rs -> crates/twolab-tui/src/widgets/choice_form/mod.rs (Apache-2.0, 2lab)
+  src/tui/wrap.rs -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, 2lab)
+
+Code moved from llmux (upstream path -> path here):
+  src/tui/anim.rs -> crates/twolab-tui/src/widgets/spinner/mod.rs (MIT, 2lab)
+  src/tui/ui.rs (cell_width, truncate_cells, pad_cells, pad_spans, wrapped_line_count) -> crates/twolab-tui/src/text.rs (MIT, 2lab)
+  src/tui/format.rs, src/tui/ui.rs (format_cost, group_thousands, usage_cost_parts), src/scheduler/select.rs (compact_duration) -> crates/twolab-tui/src/format.rs (MIT, 2lab)
+  src/tui/ui.rs (TabHit, hit tests) -> crates/twolab-tui/src/hit.rs (MIT, 2lab)
+  src/tui/ui.rs (quota_bar_line, window_gauge_parts) -> crates/twolab-tui/src/widgets/meter/mod.rs (MIT, 2lab)
+  src/tui/format.rs (gauge_bar), src/tui/ui.rs (model strip bar) -> crates/twolab-tui/src/widgets/mini_bar/mod.rs (MIT, 2lab)
+  src/tui/ui.rs (gradient_*, GradientCfg, model_name_spans) -> crates/twolab-tui/src/widgets/gradient_text/mod.rs (MIT, 2lab)
+  src/tui/ui.rs (usage_cost_cell, UsageCostTier) -> crates/twolab-tui/src/widgets/ledger/mod.rs (MIT, 2lab)
+  src/tui/ui.rs (event_banner_line, flash) -> crates/twolab-tui/src/widgets/banner/mod.rs (MIT, 2lab)
+  src/tui/ui.rs (draw_tabs, hit_test_tabs, tabs_room, draw_tabs_tail) -> crates/twolab-tui/src/widgets/tabs/mod.rs (MIT, 2lab)
+  src/tui/ui.rs (draw_context_menu, MenuChrome), src/tui/mod.rs (menu keys) -> crates/twolab-tui/src/widgets/menu/mod.rs (MIT, 2lab)
+  src/tui/ui.rs (highlight_json_line, raw_body_lines, wrap_raw_line, draw_raw_modal) -> crates/twolab-tui/src/widgets/json_view/mod.rs (MIT, 2lab)
+  src/tui/ui.rs (fold_*, strip_*) -> crates/twolab-tui/src/widgets/packed_grid/mod.rs (MIT, 2lab)
+  src/tui/ui.rs (draw_daily_chart, draw_perf_chart) -> crates/twolab-tui/src/widgets/trend_chart/mod.rs (MIT, 2lab)
+  src/tui/clip.rs (OSC 52 fallback) -> crates/twolab-tui/src/osc52.rs (MIT, 2lab)

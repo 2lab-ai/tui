@@ -39,7 +39,7 @@ use std::fmt;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
-use ratatui::text::{Line, Span, Text};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::input::{Key, KeyInput};
@@ -48,16 +48,16 @@ use crate::text;
 use crate::theme::Theme;
 
 /// One line that wraps at the width it is given (ratatui's word wrap,
-/// leading spaces kept). Its height is measured exactly: the line is
-/// painted with a marker line after it into a scratch buffer sized by
-/// [`text::wrapped_rows_lines`], which never under-counts, and the marker's
-/// row is the line's height. Scrolling paints only the visible rows.
+/// leading spaces kept). Its height is ratatui's own row count for that
+/// width (`Paragraph::line_count`), so it is exact. Wide spaces are made
+/// wrap-safe first ([`text::wrap_safe`]). Scrolling paints only the visible
+/// rows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WrappedLine(pub Line<'static>);
 
 impl WrappedLine {
     fn paragraph(&self) -> Paragraph<'static> {
-        Paragraph::new(self.0.clone()).wrap(Wrap { trim: false })
+        Paragraph::new(text::wrap_safe_line(self.0.clone())).wrap(Wrap { trim: false })
     }
 }
 
@@ -70,18 +70,8 @@ impl Renderable for WrappedLine {
         if width == 0 {
             return 1;
         }
-        let bound = text::wrapped_rows_lines(std::slice::from_ref(&self.0), width);
-        let h = u16::try_from(bound + 1).unwrap_or(u16::MAX);
-        let area = Rect::new(0, 0, width, h);
-        let mut buf = Buffer::empty(area);
-        Paragraph::new(Text::from(vec![self.0.clone(), Line::from("|")]))
-            .wrap(Wrap { trim: false })
-            .render(area, &mut buf);
-        // The marker is the last thing painted.
-        (0..h)
-            .rev()
-            .find(|&y| (0..width).any(|x| buf[(x, y)].symbol() != " "))
-            .map_or(1, |y| y.max(1))
+        // ratatui's own count, from the same word wrapper the render uses.
+        u16::try_from(self.paragraph().line_count(width).max(1)).unwrap_or(u16::MAX)
     }
 
     fn render_scrolled(&self, area: Rect, buf: &mut Buffer, scroll_offset: u16) -> bool {
@@ -468,6 +458,7 @@ impl Widget for &Pager {
 mod tests {
     use super::*;
     use crate::snapshot;
+    use ratatui::text::Text;
 
     fn draw(p: &Pager, w: u16, h: u16) -> Vec<String> {
         let area = Rect::new(0, 0, w, h);
