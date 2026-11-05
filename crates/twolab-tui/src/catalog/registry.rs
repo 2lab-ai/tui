@@ -4,6 +4,8 @@ use crate::widgets;
 /// Sidebar order: agent first, then data, input, primitives.
 #[rustfmt::skip]
 pub const ORDER: &[&str] = &[
+    // Data
+    "json-view",
     // Input
     "tabs",
     "menu",
@@ -12,6 +14,7 @@ pub const ORDER: &[&str] = &[
 ];
 
 static DOCS: &[&ComponentDoc] = &[
+    &widgets::json_view::docs::DOC,
     &widgets::menu::docs::DOC,
     &widgets::spinner::docs::DOC,
     &widgets::tabs::docs::DOC,
