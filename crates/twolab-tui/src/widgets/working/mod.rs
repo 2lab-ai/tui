@@ -439,7 +439,8 @@ impl<'a> Working<'a> {
 }
 
 /// Greedy word wrap by cells; a word wider than a row is split by grapheme.
-fn wrap(s: &str, width: usize) -> Vec<String> {
+/// Shared with the status card's value column.
+pub(crate) fn wrap(s: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut rows = Vec::new();
     for para in s.split('\n') {
