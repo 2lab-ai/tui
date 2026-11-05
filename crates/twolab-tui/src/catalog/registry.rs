@@ -2,13 +2,14 @@ use super::ComponentDoc;
 use crate::widgets;
 
 /// Sidebar order: agent first, then data, input, primitives.
-pub const ORDER: &[&str] = &["select-list", "multi-select", "spinner", "layout"];
+pub const ORDER: &[&str] = &["select-list", "multi-select", "spinner", "pager", "layout"];
 
 static DOCS: &[&ComponentDoc] = &[
     &widgets::spinner::docs::DOC,
     &widgets::layout::docs::DOC,
     &widgets::select_list::docs::DOC,
     &widgets::multi_select::docs::DOC,
+    &widgets::pager::docs::DOC,
 ];
 
 /// Every component's doc, in [`ORDER`].

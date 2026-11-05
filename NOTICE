@@ -16,3 +16,4 @@ codex-rs/tui/src/bottom_pane/selection_picker_layout.rs → crates/twolab-tui/sr
 codex-rs/tui/src/bottom_pane/picker_style.rs → crates/twolab-tui/src/widgets/select_list/rows.rs (Apache-2.0, OpenAI, modified)
 codex-rs/tui/src/bottom_pane/multi_select_picker.rs → crates/twolab-tui/src/widgets/multi_select/mod.rs (Apache-2.0, OpenAI, modified)
 codex-rs/utils/fuzzy-match/src/lib.rs → crates/twolab-tui/src/widgets/multi_select/fuzzy.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/pager_overlay.rs → crates/twolab-tui/src/widgets/pager/mod.rs, crates/twolab-tui/src/render/renderable.rs (CachedRenderable) (Apache-2.0, OpenAI, modified)
