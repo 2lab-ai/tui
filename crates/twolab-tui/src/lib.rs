@@ -18,6 +18,7 @@
 
 pub mod input;
 pub mod render;
+pub mod scroll;
 pub mod snapshot;
 pub mod text;
 pub mod theme;
