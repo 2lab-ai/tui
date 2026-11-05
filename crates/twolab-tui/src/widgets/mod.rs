@@ -2,3 +2,4 @@
 //! `catalog` feature, `docs.rs` (its catalog entry).
 
 pub mod spinner;
+pub mod tabs;
