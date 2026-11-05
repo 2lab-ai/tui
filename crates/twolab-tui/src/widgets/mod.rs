@@ -1,6 +1,7 @@
 //! Every widget module. Each has `mod.rs` (the widget) and, behind the
 //! `catalog` feature, `docs.rs` (its catalog entry).
 
+pub mod banner;
 #[path = "gradient-text/mod.rs"]
 pub mod gradient_text;
 pub mod ledger;
