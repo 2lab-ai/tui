@@ -46,3 +46,5 @@ fx src/ui/approval_screen.zig -> crates/twolab-tui/src/widgets/rule/mod.rs (Apac
 fx src/ui/render.zig -> crates/twolab-tui/src/widgets/status_bar/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
 fx src/ui/footer/input_presentation.zig -> crates/twolab-tui/src/widgets/status_bar/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
 xfx src/tui/hint.rs -> crates/twolab-tui/src/widgets/status_bar/mod.rs (Apache-2.0, 2lab)
+fx src/core/output/diff.zig -> crates/twolab-tui/src/widgets/diff_view/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+xfx src/tui/approval_view.rs -> crates/twolab-tui/src/widgets/diff_view/mod.rs (Apache-2.0, 2lab)
