@@ -3,3 +3,4 @@
 
 pub mod rule;
 pub mod spinner;
+pub mod status_bar;
