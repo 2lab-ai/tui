@@ -612,7 +612,14 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Tab' && !current.comp.keyboard.some(([k]) => /tab/i.test(k))) return;
   // Korean, Japanese and Chinese input: wait for the committed text, never send a half-composed syllable.
   if (e.metaKey || e.isComposing || e.key === 'Process') return;
-  const changed = cat.key(t.handle, e);
+  let changed: boolean;
+  try {
+    changed = cat.key(t.handle, e);
+  } catch (err) {
+    t.animated = false;
+    t.el.textContent = `This demo stopped: ${cat.panicMessage() || String(err)}`;
+    return;
+  }
   if (
     changed ||
     ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'PageUp', 'PageDown', 'Home', 'End', 'Tab'].includes(e.key)

@@ -24,6 +24,11 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: test (library, catalog contract, wasm exports)
         run: cargo test --workspace --locked
+      - name: the library alone, each feature on its own (workspace unification hides gaps)
+        run: |
+          cargo build -p twolab-tui --locked
+          cargo build -p twolab-tui --locked --features crossterm
+          cargo build -p twolab-tui --locked --features catalog
       - name: wasm build (the catalog renderer)
         run: cargo build -p twolab-tui-catalog-wasm --target wasm32-unknown-unknown --profile wasm --locked
 

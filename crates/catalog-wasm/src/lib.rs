@@ -164,20 +164,34 @@ pub extern "C" fn tui_render(
         theme: theme_of(palette, reduced),
         t,
     };
+    // Take the demo out of its slot before running it, so no RefCell borrow
+    // is held while widget code runs: with `panic = "abort"` a panic traps the
+    // call and never unwinds, and a borrow left open would make every later
+    // call — every other demo on the page — fail too. A demo that panics is
+    // simply gone (its slot stays empty); the rest keep working.
+    let Some(mut demo) = take_demo(handle) else {
+        return 0;
+    };
+    let buf = catalog::render_demo(demo.as_mut(), cols, rows, &cx);
+    answer(snapshot::runs_json(&buf));
+    put_demo(handle, demo);
+    1
+}
+
+fn take_demo(handle: u32) -> Option<Box<dyn Demo>> {
     DEMOS.with(|d| {
-        let mut d = d.borrow_mut();
-        match d
+        d.borrow_mut()
             .get_mut(handle.wrapping_sub(1) as usize)
-            .and_then(Option::as_mut)
-        {
-            Some(demo) => {
-                let buf = catalog::render_demo(demo.as_mut(), cols, rows, &cx);
-                answer(snapshot::runs_json(&buf));
-                1
-            }
-            None => 0,
-        }
+            .and_then(Option::take)
     })
+}
+
+fn put_demo(handle: u32, demo: Box<dyn Demo>) {
+    DEMOS.with(|d| {
+        if let Some(slot) = d.borrow_mut().get_mut(handle.wrapping_sub(1) as usize) {
+            *slot = Some(demo);
+        }
+    });
 }
 
 /// Key codes the page sends. A printable key is `0` with `ch` set.
@@ -217,16 +231,12 @@ pub extern "C" fn tui_key(handle: u32, code: u32, ch: u32, mods: u32) -> u32 {
             shift: mods & 4 != 0,
         },
     };
-    DEMOS.with(|d| {
-        let mut d = d.borrow_mut();
-        match d
-            .get_mut(handle.wrapping_sub(1) as usize)
-            .and_then(Option::as_mut)
-        {
-            Some(demo) => u32::from(demo.key(input)),
-            None => 0,
-        }
-    })
+    let Some(mut demo) = take_demo(handle) else {
+        return 0;
+    };
+    let changed = demo.key(input);
+    put_demo(handle, demo);
+    u32::from(changed)
 }
 
 #[cfg(test)]
@@ -254,6 +264,14 @@ mod tests {
         assert_eq!(open("spinner/nope"), 0);
         assert_eq!(open("nope/families"), 0);
         assert_eq!(open("garbage"), 0);
+    }
+
+    #[test]
+    fn a_closed_handle_renders_nothing_and_keys_nothing() {
+        let h = open("spinner/families");
+        tui_close(h);
+        assert_eq!(tui_render(h, 10, 2, 0.0, 0, 0), 0);
+        assert_eq!(tui_key(h, 1, 0, 0), 0);
     }
 
     #[test]

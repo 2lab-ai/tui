@@ -22,7 +22,7 @@ crossterm = ["dep:crossterm"]
 ratatui = { workspace = true }
 unicode-width = { workspace = true }
 unicode-segmentation = { workspace = true }
-crossterm = { version = "0.29", optional = true, default-features = false }
+crossterm = { version = "0.29", optional = true, default-features = false, features = ["events"] }
 
 [dev-dependencies]
 twolab-tui = { path = ".", features = ["catalog"] }
