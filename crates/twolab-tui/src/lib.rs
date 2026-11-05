@@ -17,6 +17,7 @@
 //! - Animated widgets hold a still frame under [`Motion::Reduced`].
 
 pub mod input;
+pub mod render;
 pub mod snapshot;
 pub mod text;
 pub mod theme;

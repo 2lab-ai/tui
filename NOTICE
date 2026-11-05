@@ -2,3 +2,8 @@ twolab-tui
 Copyright 2026 2lab.ai
 
 (sources listed below)
+codex-rs/tui/src/render/renderable.rs → crates/twolab-tui/src/render/renderable.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/render/renderable_tests.rs → crates/twolab-tui/src/render/renderable.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/render/mod.rs → crates/twolab-tui/src/render/mod.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/pager_overlay/scrolling.rs → crates/twolab-tui/src/render/scrolling.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/pager_overlay/scrolling_tests.rs → crates/twolab-tui/src/render/scrolling.rs (Apache-2.0, OpenAI, modified)
