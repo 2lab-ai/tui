@@ -2,3 +2,5 @@ twolab-tui
 Copyright 2026 2lab.ai
 
 (sources listed below)
+fx src/ui/footer/row_text.zig -> crates/twolab-tui/src/widgets/rule/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+fx src/ui/approval_screen.zig -> crates/twolab-tui/src/widgets/rule/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
