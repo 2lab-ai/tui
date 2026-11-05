@@ -19,6 +19,7 @@ use twolab_tui::theme::{Motion, Theme};
 
 thread_local! {
     static OUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static PANIC: RefCell<String> = const { RefCell::new(String::new()) };
     static DEMOS: RefCell<Vec<Option<Box<dyn Demo>>>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -66,10 +67,24 @@ pub extern "C" fn tui_out_len() -> usize {
     OUT.with(|o| o.borrow().len())
 }
 
-/// The catalog (docs without demo functions) as JSON.
+/// The catalog (docs without demo functions) as JSON. Also installs the
+/// panic hook, so call it first.
 #[unsafe(no_mangle)]
 pub extern "C" fn tui_catalog() {
+    std::panic::set_hook(Box::new(|info| {
+        // With `panic = "abort"` the page only sees `RuntimeError:
+        // unreachable`; keep the message where `tui_panic` can hand it over.
+        let msg = info.to_string();
+        PANIC.with(|p| *p.borrow_mut() = msg);
+    }));
     answer(catalog::catalog_json());
+}
+
+/// The message of the last panic (empty if none), as the answer.
+#[unsafe(no_mangle)]
+pub extern "C" fn tui_panic() {
+    let msg = PANIC.with(|p| p.borrow().clone());
+    answer(msg);
 }
 
 /// Open a demo: `"<slug>/<demo-id>"`. Returns a handle (≥ 1), or 0 when the

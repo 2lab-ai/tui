@@ -851,10 +851,10 @@ ul.plain li {
   padding: 10px 12px;
   width: max-content;
   min-width: calc(var(--cols, 80) * 1ch + 24px);
-  min-height: calc(var(--rows, 10) * 1.32em + 20px);
+  min-height: calc(var(--rows, 10) * 1.2em + 20px);
   font-family: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, Menlo, Consolas, monospace;
   font-size: 13px;
-  line-height: 1.32;
+  line-height: 1.2;
   color: var(--t-fg);
   background: var(--t-bg);
   white-space: pre;
@@ -862,7 +862,7 @@ ul.plain li {
   tab-size: 8;
 }
 .term .ln {
-  height: 1.32em;
+  height: 1.2em;
   white-space: pre;
 }
 .term .ln > span.g {

@@ -1,8 +1,8 @@
 import { marked } from 'marked';
-import notice from '../NOTICE?raw';
 import research from '../docs/research.md?raw';
-import { Catalog, DARK, type Frame, LIGHT, paint, type TermPalette, type ThemeCode } from './term';
+import notice from '../NOTICE?raw';
 import wasmUrl from './catalog.wasm?url';
+import { Catalog, DARK, type Frame, LIGHT, paint, type TermPalette, type ThemeCode } from './term';
 import './style.css';
 
 interface PropDoc {
@@ -115,13 +115,29 @@ function drop(): void {
 }
 
 function draw(t: Term, now: number): void {
-  const frame: Frame | null = cat.render(t.handle, t.cols, t.rows, now - t.start, themeCode(), view.reduced);
+  let frame: Frame | null;
+  try {
+    frame = cat.render(t.handle, t.cols, t.rows, now - t.start, themeCode(), view.reduced);
+  } catch (e) {
+    // A panicking demo stops animating and shows why, instead of taking the page down.
+    t.animated = false;
+    t.el.textContent = `This demo stopped: ${(e as Error).message}`;
+    console.error(e);
+    return;
+  }
   if (!frame) return;
   paint(t.el, frame, palette());
   t.last = now;
 }
 
-function mount(el: HTMLElement, path: string, cols: number, rows: number, animated: boolean, every: number): Term | null {
+function mount(
+  el: HTMLElement,
+  path: string,
+  cols: number,
+  rows: number,
+  animated: boolean,
+  every: number,
+): Term | null {
   const handle = cat.open(path);
   if (!handle) {
     el.textContent = `unknown demo ${path}`;
@@ -241,7 +257,12 @@ function componentPage(c: CompDoc): string {
     `<div class="seg" aria-label="${name}">${opts.map(([v, l]) => `<button data-${key}="${v}" aria-pressed="${cur === v}">${l}</button>`).join('')}</div>`;
   const props = table(
     ['Builder', 'Type', 'Default', 'What it sets'],
-    c.props.map((p) => [`<code>${esc(p.name)}</code>`, `<code class="type">${esc(p.type)}</code>`, p.default ? `<code>${esc(p.default)}</code>` : '—', esc(p.description)]),
+    c.props.map((p) => [
+      `<code>${esc(p.name)}</code>`,
+      `<code class="type">${esc(p.type)}</code>`,
+      p.default ? `<code>${esc(p.default)}</code>` : '—',
+      esc(p.description),
+    ]),
   );
   const keys = table(
     ['Keys', 'Action'],
@@ -263,9 +284,35 @@ function componentPage(c: CompDoc): string {
     <div class="pv-bar">
       <div class="seg pv-tabs" role="tablist" aria-label="Examples">${demos}</div>
       <div class="pv-tools">
-        ${seg('Width', 'width', [['narrow', '40 cols'], ['fit', 'Fit'], ['wide', '120 cols']], view.width)}
-        ${seg('Terminal', 'bg', [['dark', 'Dark'], ['light', 'Light']], view.bg)}
-        ${seg('Colour', 'colour', [['ansi', '16'], ['true', 'True colour'], ['mono', 'No colour']], view.colour)}
+        ${seg(
+          'Width',
+          'width',
+          [
+            ['narrow', '40 cols'],
+            ['fit', 'Fit'],
+            ['wide', '120 cols'],
+          ],
+          view.width,
+        )}
+        ${seg(
+          'Terminal',
+          'bg',
+          [
+            ['dark', 'Dark'],
+            ['light', 'Light'],
+          ],
+          view.bg,
+        )}
+        ${seg(
+          'Colour',
+          'colour',
+          [
+            ['ansi', '16'],
+            ['true', 'True colour'],
+            ['mono', 'No colour'],
+          ],
+          view.colour,
+        )}
         <button class="icon-btn${view.reduced ? ' on' : ''}" id="motion" aria-pressed="${view.reduced}" aria-label="Reduced motion" title="Reduced motion">◐</button>
         <button class="icon-btn" id="replay" aria-label="Replay example" title="Replay">↺</button>
       </div>
@@ -298,7 +345,13 @@ function installPage(): string {
   <h2>Rules every widget keeps</h2>
   <ul class="plain"><li>Data in, cells out. A widget never reads a clock or the terminal: time comes in as elapsed time or a shared tick, size as the area.</li><li>Colour comes from a <code>Theme</code>. With no colour (<code>NO_COLOR</code>) every cell keeps the terminal default and meaning moves to weight and glyphs — the catalog's tests check every demo.</li><li>Width is counted in terminal cells by grapheme, the unit ratatui renders, so Korean, Japanese and emoji line up.</li><li>Animated widgets hold one still frame under reduced motion.</li></ul>
   <h2>Features</h2>
-  ${table(['Feature', 'What it adds'], [['<code>crossterm</code>', 'Converts crossterm key events into the widgets’ <code>KeyInput</code>.'], ['<code>catalog</code>', 'The docs and demos this site renders. Apps leave it off.']])}`;
+  ${table(
+    ['Feature', 'What it adds'],
+    [
+      ['<code>crossterm</code>', 'Converts crossterm key events into the widgets’ <code>KeyInput</code>.'],
+      ['<code>catalog</code>', 'The docs and demos this site renders. Apps leave it off.'],
+    ],
+  )}`;
 }
 
 function themingPage(): string {
@@ -314,9 +367,29 @@ function themingPage(): string {
   return `<div class="crumb">Getting started</div><h1>Theming</h1>
   <p class="lede">One <code>Theme</code> carries the colours and the motion setting. The token names match <a href="https://2lab.ai/ui/docs/theming">@2lab.ai/ui</a>, so a dashboard and its terminal sibling say the same thing in the same colour.</p>
   <h2>Four palettes</h2>
-  ${table(['Constructor', 'When'], [['<code>Theme::ansi()</code>', 'Default. The 16 named colours, so the user’s terminal palette decides the hues and light or dark both work.'], ['<code>Theme::dark()</code> / <code>Theme::light()</code>', 'True colour, when you know the background.'], ['<code>Theme::mono()</code>', 'No colour at all — what <code>NO_COLOR</code> asks for. Meaning moves to bold, dim and reversed.'], ['<code>Theme::from_env()</code>', '<code>mono</code> when <code>NO_COLOR</code> is set, else <code>ansi</code>.']])}
+  ${table(
+    ['Constructor', 'When'],
+    [
+      [
+        '<code>Theme::ansi()</code>',
+        'Default. The 16 named colours, so the user’s terminal palette decides the hues and light or dark both work.',
+      ],
+      ['<code>Theme::dark()</code> / <code>Theme::light()</code>', 'True colour, when you know the background.'],
+      [
+        '<code>Theme::mono()</code>',
+        'No colour at all — what <code>NO_COLOR</code> asks for. Meaning moves to bold, dim and reversed.',
+      ],
+      [
+        '<code>Theme::from_env()</code>',
+        '<code>mono</code> when <code>NO_COLOR</code> is set, else <code>ansi</code>.',
+      ],
+    ],
+  )}
   <h2>Tokens</h2>
-  ${table(['Token', 'Means'], tokens.map(([k, v]) => [`<code>${esc(k)}</code>`, esc(v)]))}
+  ${table(
+    ['Token', 'Means'],
+    tokens.map(([k, v]) => [`<code>${esc(k)}</code>`, esc(v)]),
+  )}
   <h2>Motion</h2>
   ${codeBlock(`let theme = Theme::from_env().with_motion(Motion::Reduced);`, 'motion')}
   <p class="desc">Under <code>Motion::Reduced</code> a spinner holds its first glyph and a shimmer draws plain bold text. Clocks still count — reduced motion stops movement, not information.</p>`;
@@ -390,7 +463,11 @@ function mountThumbs(): void {
 
 /** Scale a tile's terminal to fit its box. */
 function fitThumb(box: HTMLElement, pre: HTMLElement): void {
-  const s = Math.min(1, (box.clientWidth - 16) / Math.max(1, pre.offsetWidth), (box.clientHeight - 16) / Math.max(1, pre.offsetHeight));
+  const s = Math.min(
+    1,
+    (box.clientWidth - 16) / Math.max(1, pre.offsetWidth),
+    (box.clientHeight - 16) / Math.max(1, pre.offsetHeight),
+  );
   pre.style.transform = `translate(-50%, -50%) scale(${s.toFixed(3)})`;
 }
 
@@ -467,7 +544,8 @@ document.addEventListener('click', (e) => {
     const demo = current.comp.demos.find((x) => x.id === demoBtn.dataset.demo);
     if (demo) {
       current.demo = demo;
-      for (const b of Array.from(document.querySelectorAll('[data-demo]'))) b.setAttribute('aria-selected', String(b === demoBtn));
+      for (const b of Array.from(document.querySelectorAll('[data-demo]')))
+        b.setAttribute('aria-selected', String(b === demoBtn));
       mountStage();
     }
     return;
@@ -528,9 +606,14 @@ document.addEventListener('keydown', (e) => {
   const t = terms.find((x) => x.el === el);
   if (!t) return;
   if (e.key === 'Tab' && !current.comp.keyboard.some(([k]) => /tab/i.test(k))) return;
-  if (e.metaKey) return;
+  // Korean, Japanese and Chinese input: wait for the committed text, never send a half-composed syllable.
+  if (e.metaKey || e.isComposing || e.key === 'Process') return;
   const changed = cat.key(t.handle, e);
-  if (changed || ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'PageUp', 'PageDown', 'Home', 'End', 'Tab'].includes(e.key)) e.preventDefault();
+  if (
+    changed ||
+    ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'PageUp', 'PageDown', 'Home', 'End', 'Tab'].includes(e.key)
+  )
+    e.preventDefault();
   if (changed) draw(t, performance.now());
 });
 

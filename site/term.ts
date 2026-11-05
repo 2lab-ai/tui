@@ -144,7 +144,14 @@ export function paint(el: HTMLElement, frame: Frame, pal: TermPalette): void {
 
 /** Plain text of a frame (for tests and for the copy button). */
 export function frameText(frame: Frame): string {
-  return frame.lines.map((l) => l.map((r) => r[0]).join('').replace(/\s+$/, '')).join('\n');
+  return frame.lines
+    .map((l) =>
+      l
+        .map((r) => r[0])
+        .join('')
+        .replace(/\s+$/, ''),
+    )
+    .join('\n');
 }
 
 // ── the wasm module ──
@@ -156,6 +163,7 @@ interface Exports {
   tui_out_ptr(): number;
   tui_out_len(): number;
   tui_catalog(): void;
+  tui_panic(): void;
   tui_open(ptr: number, len: number): number;
   tui_close(handle: number): void;
   tui_render(handle: number, cols: number, rows: number, tMs: number, palette: number, reduced: number): number;
@@ -202,9 +210,26 @@ export class Catalog {
     this.x.tui_close(h);
   }
 
+  /** A frame, or null for an unknown handle. Throws with the Rust panic message if the demo panicked. */
   render(h: number, cols: number, rows: number, tMs: number, theme: ThemeCode, reduced: boolean): Frame | null {
-    if (!this.x.tui_render(h, cols, rows, tMs, theme, reduced ? 1 : 0)) return null;
+    let ok: number;
+    try {
+      ok = this.x.tui_render(h, cols, rows, tMs, theme, reduced ? 1 : 0);
+    } catch (e) {
+      throw new Error(this.panicMessage() || String(e));
+    }
+    if (!ok) return null;
     return JSON.parse(this.out()) as Frame;
+  }
+
+  /** The last Rust panic message, or '' if none. */
+  panicMessage(): string {
+    try {
+      this.x.tui_panic();
+      return this.out();
+    } catch {
+      return '';
+    }
   }
 
   /** Returns whether the demo changed. */
