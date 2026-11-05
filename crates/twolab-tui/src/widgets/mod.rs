@@ -6,3 +6,4 @@ pub mod menu;
 pub mod packed_grid;
 pub mod spinner;
 pub mod tabs;
+pub mod trend_chart;

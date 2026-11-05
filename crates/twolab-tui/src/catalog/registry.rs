@@ -7,6 +7,7 @@ pub const ORDER: &[&str] = &[
     // Data
     "json-view",
     "packed-grid",
+    "trend-chart",
     // Input
     "tabs",
     "menu",
@@ -20,6 +21,7 @@ static DOCS: &[&ComponentDoc] = &[
     &widgets::packed_grid::docs::DOC,
     &widgets::spinner::docs::DOC,
     &widgets::tabs::docs::DOC,
+    &widgets::trend_chart::docs::DOC,
 ];
 
 /// Every component's doc, in [`ORDER`].
