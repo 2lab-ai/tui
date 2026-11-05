@@ -2,3 +2,5 @@ twolab-tui
 Copyright 2026 2lab.ai
 
 (sources listed below)
+fx src/core/output/diff.zig -> crates/twolab-tui/src/widgets/diff_view/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+xfx src/tui/approval_view.rs -> crates/twolab-tui/src/widgets/diff_view/mod.rs (Apache-2.0, 2lab)
