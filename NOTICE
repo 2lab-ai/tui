@@ -23,3 +23,6 @@ codex-rs/tui/src/summary_shimmer.rs → crates/twolab-tui/src/widgets/shimmer/mo
 codex-rs/tui/src/shimmer.rs → crates/twolab-tui/src/widgets/shimmer/mod.rs (Apache-2.0, OpenAI, modified)
 codex-rs/tui/src/status_indicator_widget.rs → crates/twolab-tui/src/widgets/working/mod.rs (Apache-2.0, OpenAI, modified)
 codex-rs/tui/src/status_indicator_widget/timer.rs → crates/twolab-tui/src/widgets/working/mod.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/key_hint.rs → crates/twolab-tui/src/widgets/key_hints/mod.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/footer_hint.rs → crates/twolab-tui/src/widgets/key_hints/mod.rs (Apache-2.0, OpenAI, modified)
+codex-rs/tui/src/shortcut_help.rs → crates/twolab-tui/src/widgets/key_hints/mod.rs (Apache-2.0, OpenAI, modified)
