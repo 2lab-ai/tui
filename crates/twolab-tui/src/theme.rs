@@ -11,6 +11,7 @@
 //! [`Theme::mono`] draws no colour at all — what `NO_COLOR` asks for — and keeps
 //! meaning in weight (bold, dim, reversed) and glyphs instead.
 
+use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
 
 /// Whether widgets animate. `Reduced` keeps every animated widget on one
@@ -296,6 +297,26 @@ impl Theme {
     }
 }
 
+/// Take the colour out of a frame that was drawn with colours — for a host
+/// that honours `NO_COLOR` without rewriting every style it builds.
+///
+/// Every cell keeps the terminal's default foreground and background and
+/// keeps its modifiers (bold, dim, reversed, underline), so selection and
+/// emphasis still show. Text that was red — errors, failures, the critical
+/// end of a gauge — is made bold, so the one signal colour carried most is
+/// not lost with it.
+pub fn decolor(buf: &mut Buffer) {
+    for cell in buf.content.iter_mut() {
+        if matches!(cell.fg, Color::Red | Color::LightRed) {
+            cell.modifier.insert(Modifier::BOLD);
+        }
+        cell.fg = Color::Reset;
+        cell.bg = Color::Reset;
+        // The crate always builds ratatui with `underline-color`.
+        cell.underline_color = Color::Reset;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,6 +345,29 @@ mod tests {
             assert!(matches!(s.fg, None | Some(Color::Reset)), "{s:?}");
             assert!(matches!(s.bg, None | Some(Color::Reset)), "{s:?}");
         }
+    }
+
+    #[test]
+    fn decolor_drops_colour_keeps_weight_and_bolds_red() {
+        use ratatui::layout::Rect;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 3, 1));
+        buf[(0, 0)]
+            .set_symbol("a")
+            .set_fg(Color::Green)
+            .set_bg(Color::Blue);
+        buf[(1, 0)].set_symbol("b").set_fg(Color::Red);
+        buf[(2, 0)].set_symbol("c").set_style(
+            Style::new()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::REVERSED),
+        );
+        decolor(&mut buf);
+        for cell in buf.content() {
+            assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
+        }
+        assert!(buf[(1, 0)].modifier.contains(Modifier::BOLD));
+        assert!(!buf[(0, 0)].modifier.contains(Modifier::BOLD));
+        assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
     }
 
     #[test]

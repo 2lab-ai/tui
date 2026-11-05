@@ -253,7 +253,11 @@ mod tests {
         assert_eq!(truncate("한글입니다", 4), "한…");
         assert_eq!(truncate("abc", 0), "");
         assert_eq!(truncate("", 0), "");
-        assert_eq!(truncate("\u{200d}", 0), "", "zero budget is empty even for zero-width text");
+        assert_eq!(
+            truncate("\u{200d}", 0),
+            "",
+            "zero budget is empty even for zero-width text"
+        );
         assert_eq!(truncate("❤\u{fe0f}❤\u{fe0f}❤\u{fe0f}", 4), "❤\u{fe0f}…");
         for max in 0..12 {
             assert!(
