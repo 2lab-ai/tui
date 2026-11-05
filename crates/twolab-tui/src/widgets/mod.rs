@@ -3,5 +3,6 @@
 
 pub mod json_view;
 pub mod menu;
+pub mod packed_grid;
 pub mod spinner;
 pub mod tabs;

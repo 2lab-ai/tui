@@ -6,6 +6,7 @@ use crate::widgets;
 pub const ORDER: &[&str] = &[
     // Data
     "json-view",
+    "packed-grid",
     // Input
     "tabs",
     "menu",
@@ -16,6 +17,7 @@ pub const ORDER: &[&str] = &[
 static DOCS: &[&ComponentDoc] = &[
     &widgets::json_view::docs::DOC,
     &widgets::menu::docs::DOC,
+    &widgets::packed_grid::docs::DOC,
     &widgets::spinner::docs::DOC,
     &widgets::tabs::docs::DOC,
 ];
