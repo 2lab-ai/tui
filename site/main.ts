@@ -70,9 +70,23 @@ const PROJECT: Record<string, string> = { llmux: 'llmux', codex: 'OpenAI Codex',
 
 type TermBg = 'dark' | 'light';
 type Colour = 'ansi' | 'true' | 'mono';
+/** localStorage that never throws (it does when storage is blocked). */
+function stored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function store(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+}
+
 const view = {
-  bg: (localStorage.getItem('2lab-tui-term') as TermBg) || 'dark',
-  colour: (localStorage.getItem('2lab-tui-colour') as Colour) || 'ansi',
+  bg: (stored('2lab-tui-term') as TermBg) || 'dark',
+  colour: (stored('2lab-tui-colour') as Colour) || 'ansi',
   reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
   width: 'fit' as 'narrow' | 'fit' | 'wide',
 };
@@ -436,7 +450,7 @@ function mountStage(): void {
   mount(el, `${current.comp.slug}/${d.id}`, cols, d.rows, d.animated, 33);
   if (label) label.textContent = `${current.comp.slug} — ${cols}×${d.rows}`;
   if (note) {
-    const keys = d.interactive ? ' Click the terminal, then use the keys listed below.' : '';
+    const keys = d.interactive ? ' Click the terminal, then use the keys listed below; Esc or Tab leaves it.' : '';
     note.textContent = `${d.description}${keys}`;
     note.hidden = !note.textContent;
   }
@@ -565,7 +579,7 @@ document.addEventListener('click', (e) => {
   const bg = t.closest('[data-bg]') as HTMLElement | null;
   if (bg && bg.tagName === 'BUTTON') {
     view.bg = bg.dataset.bg as TermBg;
-    localStorage.setItem('2lab-tui-term', view.bg);
+    store('2lab-tui-term', view.bg);
     setPressed('data-bg', bg);
     document.getElementById('stage')?.setAttribute('data-bg', view.bg);
     redrawAll();
@@ -574,7 +588,7 @@ document.addEventListener('click', (e) => {
   const col = t.closest('[data-colour]') as HTMLElement | null;
   if (col) {
     view.colour = col.dataset.colour as Colour;
-    localStorage.setItem('2lab-tui-colour', view.colour);
+    store('2lab-tui-colour', view.colour);
     setPressed('data-colour', col);
     redrawAll();
     return;
@@ -621,13 +635,17 @@ document.addEventListener('keydown', (e) => {
     t.el.textContent = `This demo stopped: ${cat.panicMessage() || String(err)}`;
     return;
   }
-  if (
-    changed ||
-    ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'PageUp', 'PageDown', 'Home', 'End', 'Tab'].includes(e.key)
-  )
-    e.preventDefault();
+  // Never a keyboard trap: Tab moves focus on unless the demo used it, and an Esc the demo did not use leaves.
+  if (!changed && e.key === 'Escape') {
+    (el as HTMLElement).blur();
+    return;
+  }
+  if (e.key === 'Tab' ? changed : changed || SCROLL_KEYS.includes(e.key)) e.preventDefault();
   if (changed) draw(t, performance.now());
 });
+
+/** Keys that would scroll the page while the terminal has focus. */
+const SCROLL_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'PageUp', 'PageDown', 'Home', 'End'];
 
 /** The stage's terminal (the one the keys go to). */
 function stageTerm(): Term | undefined {

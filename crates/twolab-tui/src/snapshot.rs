@@ -7,12 +7,12 @@
 
 use ratatui::buffer::{Buffer, Cell, CellDiffOption};
 use ratatui::style::{Color, Modifier};
-use unicode_width::UnicodeWidthStr;
 
 /// Visible width of one cell's symbol (0-width symbols count as one cell, the
 /// way ratatui's own diff counts them).
 fn cell_width(cell: &Cell) -> usize {
-    UnicodeWidthStr::width(cell.symbol()).max(1)
+    use ratatui::buffer::CellWidth;
+    usize::from(cell.cell_width()).max(1)
 }
 
 /// Rows of the buffer as plain strings, trailing spaces trimmed.

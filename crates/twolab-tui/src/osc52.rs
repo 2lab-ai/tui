@@ -68,7 +68,13 @@ pub fn sequence(text: &str, mux: Mux) -> String {
         // tmux passthrough: ESC P tmux; <payload with every ESC doubled> ESC \.
         // Needs `set -g allow-passthrough on` on tmux 3.3+; older tmux passes it.
         Mux::Tmux => format!("\x1bPtmux;{}\x1b\\", osc.replace('\x1b', "\x1b\x1b")),
-        Mux::Screen => format!("\x1bP{osc}\x1b\\"),
+        // GNU screen caps one DCS string (768 bytes by default): send the
+        // escape in 256-byte pieces, each in its own DCS, which screen joins.
+        Mux::Screen => osc
+            .as_bytes()
+            .chunks(256)
+            .map(|c| format!("\x1bP{}\x1b\\", String::from_utf8_lossy(c)))
+            .collect(),
     }
 }
 
@@ -106,6 +112,18 @@ mod tests {
     #[test]
     fn screen_wraps_in_dcs() {
         assert_eq!(sequence("hi", Mux::Screen), "\x1bP\x1b]52;c;aGk=\x07\x1b\\");
+    }
+
+    #[test]
+    fn screen_splits_long_escapes() {
+        let s = sequence(&"x".repeat(600), Mux::Screen);
+        let pieces = s.matches("\x1bP").count();
+        assert!(pieces >= 4, "{pieces}");
+        let joined: String = s
+            .split("\x1b\\")
+            .map(|p| p.trim_start_matches("\x1bP"))
+            .collect();
+        assert_eq!(joined, sequence(&"x".repeat(600), Mux::None));
     }
 
     #[test]

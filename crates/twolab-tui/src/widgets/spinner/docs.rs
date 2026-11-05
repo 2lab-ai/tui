@@ -5,6 +5,7 @@ use ratatui::widgets::{Paragraph, Widget};
 
 use super::{Spinner, SpinnerKind};
 use crate::catalog::{ComponentDoc, DemoCx, DemoDoc, FnDemo, Group, PropDoc, Source};
+use crate::text;
 use crate::theme::{Motion, Status};
 
 const USAGE: &str = r#"use twolab_tui::spinner::{Spinner, SpinnerKind};
@@ -39,7 +40,7 @@ fn families(area: Rect, buf: &mut Buffer, cx: &DemoCx) {
                 Span::raw(" "),
                 s.span_at(cx.t, t),
                 Span::raw("  "),
-                Span::styled(format!("{:<8}", k.name()), t.accent()),
+                Span::styled(text::pad(k.name(), 8, text::Align::Left), t.accent()),
                 Span::styled(*what, t.secondary()),
             ])
         })
@@ -51,7 +52,10 @@ fn in_rows(area: Rect, buf: &mut Buffer, cx: &DemoCx) {
     let t = &cx.theme;
     let row = |name: &str, kind: SpinnerKind, st: Status, note: &str| {
         Line::from(vec![
-            Span::styled(format!(" {name:<16}"), t.text()),
+            Span::styled(
+                format!(" {}", text::pad(name, 16, text::Align::Left)),
+                t.text(),
+            ),
             Spinner::new(kind).style(t.status(st)).span_at(cx.t, t),
             Span::raw(" "),
             Span::styled(note.to_string(), t.status(st)),

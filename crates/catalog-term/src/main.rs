@@ -205,7 +205,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
     let w = demo.cols.min(stage.width.saturating_sub(2));
     let h = demo.rows.min(stage.height.saturating_sub(2));
-    let frame_area = Rect::new(stage.x, stage.y + 1, w + 2, h + 2);
+    let frame_area = Rect::new(stage.x, stage.y + 1, w + 2, h + 2).intersection(f.area());
     let title = if app.focused {
         " keys go to the demo · esc to leave "
     } else if demo.interactive {

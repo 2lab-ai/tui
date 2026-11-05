@@ -97,11 +97,26 @@ fn every_demo_renders_at_every_size_time_and_theme() {
                             // The exporter must cope with whatever the widget drew.
                             let j = snapshot::runs_json(&buf);
                             assert!(j.ends_with("]}"), "{}/{}", d.slug, m.id);
+                            if theme.is_mono() {
+                                assert_no_colour(&buf, d.slug, m.id);
+                            }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/// No foreground, background or underline colour on any cell.
+fn assert_no_colour(buf: &ratatui::buffer::Buffer, slug: &str, id: &str) {
+    for cell in buf.content() {
+        assert!(
+            matches!(cell.fg, Color::Reset)
+                && matches!(cell.bg, Color::Reset)
+                && matches!(cell.underline_color, Color::Reset),
+            "{slug}/{id}: coloured cell {cell:?} in mono"
+        );
     }
 }
 
@@ -193,6 +208,13 @@ fn interactive_demos_take_keys_without_panicking() {
                 demo.key(k);
                 let _ = render_demo(demo.as_mut(), m.cols, m.rows, &cx);
                 let _ = render_demo(demo.as_mut(), 12, 2, &cx);
+                // After keys (a selection, an open menu) mono still has no colour.
+                let mono = DemoCx {
+                    theme: Theme::mono(),
+                    t: Duration::from_millis(700),
+                };
+                let buf = render_demo(demo.as_mut(), m.cols, m.rows, &mono);
+                assert_no_colour(&buf, d.slug, m.id);
             }
         }
     }

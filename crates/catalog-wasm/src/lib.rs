@@ -71,13 +71,21 @@ pub extern "C" fn tui_out_len() -> usize {
 /// panic hook, so call it first.
 #[unsafe(no_mangle)]
 pub extern "C" fn tui_catalog() {
-    std::panic::set_hook(Box::new(|info| {
-        // With `panic = "abort"` the page only sees `RuntimeError:
-        // unreachable`; keep the message where `tui_panic` can hand it over.
-        let msg = info.to_string();
-        PANIC.with(|p| *p.borrow_mut() = msg);
-    }));
+    hook();
     answer(catalog::catalog_json());
+}
+
+/// Install the panic hook (once): with `panic = "abort"` the page only sees
+/// `RuntimeError: unreachable`; the hook keeps the message where
+/// `tui_panic` can hand it over. Every entry that runs widget code calls it.
+fn hook() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        std::panic::set_hook(Box::new(|info| {
+            let msg = info.to_string();
+            PANIC.with(|p| *p.borrow_mut() = msg);
+        }));
+    });
 }
 
 /// The message of the last panic (empty if none), as the answer.
@@ -94,6 +102,7 @@ pub extern "C" fn tui_panic() {
 /// See [`read_str`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tui_open(ptr: *const u8, len: usize) -> u32 {
+    hook();
     // SAFETY: forwarded from the caller's contract.
     let path = unsafe { read_str(ptr, len) };
     let Some((slug, id)) = path.split_once('/') else {
@@ -169,6 +178,7 @@ pub extern "C" fn tui_render(
     // call and never unwinds, and a borrow left open would make every later
     // call — every other demo on the page — fail too. A demo that panics is
     // simply gone (its slot stays empty); the rest keep working.
+    hook();
     let Some(mut demo) = take_demo(handle) else {
         return 0;
     };
@@ -231,6 +241,7 @@ pub extern "C" fn tui_key(handle: u32, code: u32, ch: u32, mods: u32) -> u32 {
             shift: mods & 4 != 0,
         },
     };
+    hook();
     let Some(mut demo) = take_demo(handle) else {
         return 0;
     };

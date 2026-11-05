@@ -210,7 +210,12 @@ impl Theme {
 
     /// Body text.
     pub fn text(&self) -> Style {
-        Style::new().fg(self.text)
+        // On ANSI and mono, body text is the terminal default: no explicit
+        // `fg(Reset)`, which would wipe a colour the host set on a block.
+        match self.palette {
+            Palette::Ansi | Palette::Mono => Style::new(),
+            Palette::Dark | Palette::Light => Style::new().fg(self.text),
+        }
     }
 
     /// Labels and secondary facts.
