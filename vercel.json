@@ -2,7 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "",
   "outputDirectory": "site-dist",
-  "redirects": [{ "source": "/", "destination": "/tui", "permanent": false }],
+  "redirects": [
+    { "source": "/", "destination": "https://www.2lab.ai/tui", "permanent": true },
+    { "source": "/((?!tui$|tui/).*)", "destination": "https://www.2lab.ai/tui/$1", "permanent": true }
+  ],
   "rewrites": [
     { "source": "/tui", "destination": "/tui/index.html" },
     { "source": "/tui/(.*)", "destination": "/tui/index.html" }
