@@ -220,6 +220,11 @@ impl Selection {
     }
 }
 
+/// Cells in the one `Buffer` [`Pager::selected_text`] draws the selection
+/// into, a chunk of rows at a time: bounded whatever the selection's size
+/// (a `Buffer` holds at most `u16::MAX` rows anyway).
+const READ_CELLS: usize = 1 << 16;
+
 /// Rows to scroll when a drag is `distance` rows past the content's top or
 /// bottom edge: 3 per row of distance, 3 to 15 (herdr's
 /// `selection_edge_scroll_lines`).
@@ -242,7 +247,7 @@ fn is_word(g: &str) -> bool {
 
 /// The graphemes drawn on row `y` of `buf`: `(x, cells, symbol)`, a wide
 /// glyph once with its full width (the way a terminal backend walks cells).
-fn row_cells(buf: &Buffer, y: u16) -> Vec<(u16, u16, String)> {
+fn row_cells(buf: &Buffer, y: u16) -> Vec<(u16, u16, &str)> {
     let area = buf.area;
     let mut out = Vec::new();
     let mut x = area.x;
@@ -250,9 +255,9 @@ fn row_cells(buf: &Buffer, y: u16) -> Vec<(u16, u16, String)> {
         let cell = &buf[(x, y)];
         let w = cell.cell_width().max(1);
         let sym = if cell.diff_option == CellDiffOption::Skip {
-            " ".to_string()
+            " "
         } else {
-            cell.symbol().to_string()
+            cell.symbol()
         };
         out.push((x, w, sym));
         x = x.saturating_add(w);
@@ -556,23 +561,23 @@ impl Pager {
         let Some(((r, c), true)) = self.content_cell(col, row) else {
             return false;
         };
-        let Some(buf) = self.content_rows(r, r) else {
+        let Some(buf) = self.content_rows(r, 1) else {
             return false;
         };
         let cells = row_cells(&buf, 0);
         let Some(at) = cells.iter().position(|(x, w, _)| c >= *x && c < x + w) else {
             return false;
         };
-        if !is_word(&cells[at].2) {
+        if !is_word(cells[at].2) {
             return false;
         }
         let first = (0..at)
             .rev()
-            .take_while(|&i| is_word(&cells[i].2))
+            .take_while(|&i| is_word(cells[i].2))
             .last()
             .unwrap_or(at);
         let last = (at + 1..cells.len())
-            .take_while(|&i| is_word(&cells[i].2))
+            .take_while(|&i| is_word(cells[i].2))
             .last()
             .unwrap_or(at);
         let (x0, _, _) = cells[first];
@@ -581,11 +586,10 @@ impl Pager {
         true
     }
 
-    /// Content rows `first..=last` drawn at the last paint's width.
-    fn content_rows(&self, first: usize, last: usize) -> Option<Buffer> {
+    /// `rows` content rows from row `first`, drawn at the last paint's width.
+    fn content_rows(&self, first: usize, rows: u16) -> Option<Buffer> {
         let (view, _) = self.last_view.get()?;
-        let h = u16::try_from(last.checked_sub(first)? + 1).unwrap_or(u16::MAX);
-        let area = Rect::new(0, 0, view.width, h);
+        let area = Rect::new(0, 0, view.width, rows);
         let mut buf = Buffer::empty(area);
         self.render_content(area, &mut buf, first);
         Some(buf)
@@ -594,30 +598,60 @@ impl Pager {
     /// The selected text, read from the cells as drawn at the last paint's
     /// width: one line per row, trailing blanks trimmed, a wide glyph (CJK,
     /// emoji, a flag) whole even when the selection starts or ends on its
-    /// second cell. `None` without a visible selection or a paint.
+    /// second cell. Every selected row is copied, however many: one walk
+    /// over the content draws them a chunk at a time into one buffer of at
+    /// most [`READ_CELLS`] cells. `None` without a visible selection or a
+    /// paint.
     pub fn selected_text(&self) -> Option<String> {
         let sel = self.selection.filter(|s| s.is_visible())?;
         let (view, _) = self.last_view.get()?;
         let ((sr, sc), (er, ec)) = sel.ordered();
-        let total = self.content_height(view.width);
+        let width = view.width;
+        let total = self.content_height(width);
         if total == 0 || sr >= total {
             return Some(String::new());
         }
         // Rows past the end (the `~` rows) hold no text.
         let last = er.min(total - 1);
-        let buf = self.content_rows(sr, last)?;
-        let mut out: Vec<String> = Vec::with_capacity(last - sr + 1);
-        for r in sr..=last {
-            let c0 = if r == sr { sc } else { 0 };
-            let c1 = if r == er { ec } else { u16::MAX };
-            let line: String = row_cells(&buf, (r - sr) as u16)
-                .into_iter()
-                .filter(|(x, w, _)| *x <= c1 && x + w > c0)
-                .map(|(_, _, sym)| sym)
-                .collect();
-            out.push(line.trim_end().to_string());
+        let chunk = (READ_CELLS / usize::from(width.max(1)))
+            .clamp(1, usize::from(u16::MAX))
+            .min(last - sr + 1);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, chunk as u16));
+        let mut out = String::new();
+        let mut line = String::new();
+        // The item holding row `start`, and its first row.
+        let (mut item, mut item_top) = (0, 0);
+        let mut start = sr;
+        while start <= last {
+            while let Some(c) = self.content.get(item) {
+                let h = usize::from(c.desired_height(width));
+                if item_top + h > start {
+                    break;
+                }
+                item_top += h;
+                item += 1;
+            }
+            buf.reset();
+            self.render_items(buf.area, &mut buf, start, item, item_top);
+            let n = (last - start + 1).min(chunk);
+            for (y, r) in (start..start + n).enumerate() {
+                let c0 = if r == sr { sc } else { 0 };
+                let c1 = if r == er { ec } else { u16::MAX };
+                line.clear();
+                for (_, _, sym) in row_cells(&buf, y as u16)
+                    .into_iter()
+                    .filter(|(x, w, _)| *x <= c1 && x + w > c0)
+                {
+                    line.push_str(sym);
+                }
+                if r > sr {
+                    out.push('\n');
+                }
+                out.push_str(line.trim_end());
+            }
+            start += n;
         }
-        Some(out.join("\n"))
+        Some(out)
     }
 
     /// The OSC 52 escape that puts the selected text on the clipboard of
@@ -723,11 +757,24 @@ impl Pager {
 
     /// Paint the content scrolled by `offset`; returns the rows painted.
     fn render_content(&self, area: Rect, buf: &mut Buffer, offset: usize) -> u16 {
+        self.render_items(area, buf, offset, 0, 0)
+    }
+
+    /// [`Pager::render_content`] walking from item `from`, whose first row
+    /// is content row `from_top` (at most `offset`).
+    fn render_items(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        offset: usize,
+        from: usize,
+        from_top: usize,
+    ) -> u16 {
         buf.set_style(area, self.theme.text());
-        let mut y = -(offset as isize);
+        let mut y = -((offset - from_top) as isize);
         let mut drawn: u16 = 0;
         let view = area.height as isize;
-        for item in &self.content {
+        for item in self.content.iter().skip(from) {
             let top = y;
             let height = item.desired_height(area.width) as isize;
             y += height;
@@ -1389,6 +1436,54 @@ mod tests {
             p.copy_sequence(osc52::Mux::None),
             Some(osc52::sequence("e\u{301}tude", osc52::Mux::None))
         );
+    }
+
+    /// Review #1: a selection taller than a `Buffer` can be (u16::MAX rows)
+    /// panicked at row 65,535; every row must still be copied.
+    #[test]
+    fn selected_text_copies_every_row_past_u16_max() {
+        for n in [65_536usize, 70_000] {
+            let mut p = Pager::from_text("t", &vec!["x"; n].join("\n")).hints(false);
+            paint(&p, 5, 4);
+            p.set_selection(Some(Selection::range((0, 0), (n - 1, 0))));
+            let text = p.selected_text().expect("text");
+            assert_eq!(text.lines().count(), n, "every row");
+            assert!(text.lines().all(|l| l == "x"), "n={n}");
+        }
+        let lines: Vec<Line<'static>> = (0..70_000).map(|i| Line::from(format!("{i}"))).collect();
+        let mut p = Pager::new("t", lines).hints(false);
+        paint(&p, 8, 4);
+        p.set_selection(Some(Selection::range((65_534, 2), (69_999, 1))));
+        let text = p.selected_text().expect("text");
+        let rows: Vec<&str> = text.lines().collect();
+        assert_eq!(rows.len(), 70_000 - 65_534);
+        assert_eq!(rows[0], "534");
+        assert_eq!(rows[1], "65535");
+        assert_eq!(rows[2], "65536");
+        assert_eq!(rows[rows.len() - 1], "69");
+        // The second review's input: 65,535 rows plus the empty last line,
+        // selected to the far end, at 40×11.
+        let mut p = Pager::from_text("t", &"x\n".repeat(65_535)).hints(false);
+        paint(&p, 40, 11);
+        p.set_selection(Some(Selection::range((0, 0), (usize::MAX, u16::MAX))));
+        let text = p.selected_text().expect("text");
+        assert_eq!(text.split('\n').count(), 65_536);
+        assert!(text.ends_with("x\n"));
+    }
+
+    /// Select all over 200,000 rows: one walk over the content and a
+    /// bounded buffer, not rows × width cells.
+    #[test]
+    fn select_all_over_200k_rows_is_one_walk() {
+        let n = 200_000;
+        let lines: Vec<Line<'static>> = (0..n).map(|i| Line::from(format!("row {i}"))).collect();
+        let mut p = Pager::new("t", lines).hints(false);
+        paint(&p, 40, 11);
+        p.set_selection(Some(Selection::range((0, 0), (n - 1, 39))));
+        let text = p.selected_text().expect("text");
+        assert_eq!(text.lines().count(), n);
+        assert_eq!(text.lines().nth(123_456), Some("row 123456"));
+        assert!(text.ends_with("row 199999"));
     }
 
     #[test]
