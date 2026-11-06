@@ -852,7 +852,7 @@ impl<'a> ToastStack<'a> {
         }
         // Wide enough for the note too, at the most it could ever count.
         let note_w = self
-            .note(self.toasts.len() + self.queued)
+            .note(self.toasts.len().saturating_add(self.queued))
             .map_or(0, |n| text::width(&n.long) + 4);
         let width = self
             .toasts
@@ -905,7 +905,7 @@ impl<'a> ToastStack<'a> {
     pub fn layout(&self, bounds: Rect) -> StackLayout {
         let (plans, form) = self.plan(bounds);
         StackLayout {
-            hidden: self.toasts.len() - plans.len() + self.queued,
+            hidden: (self.toasts.len() - plans.len()).saturating_add(self.queued),
             toasts: plans.into_iter().map(|(i, p)| (i, p.rect)).collect(),
             form,
         }
@@ -934,7 +934,7 @@ impl<'a> ToastStack<'a> {
     pub fn render(&self, bounds: Rect, buf: &mut Buffer) -> StackLayout {
         let bounds = bounds.intersection(buf.area);
         let (plans, form) = self.plan(bounds);
-        let hidden = self.toasts.len() - plans.len() + self.queued;
+        let hidden = (self.toasts.len() - plans.len()).saturating_add(self.queued);
         let note = self.note(hidden);
         let last = plans.len().saturating_sub(1);
         for (n, (i, plan)) in plans.iter().enumerate() {
@@ -1489,6 +1489,21 @@ mod tests {
         let text = snapshot::text(&buf);
         assert!(text.contains(" +3 more · 1 dropped ┘"), "{text}");
         assert_eq!(l.hit_test(89, 0), Some(0));
+    }
+
+    /// Review #8: one toast with `queued(usize::MAX)` overflowed the hidden
+    /// count in `layout()`; the count saturates and still says so.
+    #[test]
+    fn a_huge_queue_count_saturates() {
+        let toasts = [Toast::ok("copied")];
+        let stack = ToastStack::new(&toasts)
+            .queued(usize::MAX)
+            .theme(Theme::mono());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 8));
+        let area = buf.area;
+        let l = stack.render(area, &mut buf);
+        assert_eq!(l.hidden, usize::MAX);
+        assert!(snapshot::text(&buf).contains("more"));
     }
 
     #[test]

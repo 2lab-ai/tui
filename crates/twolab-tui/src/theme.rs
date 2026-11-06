@@ -1,3 +1,11 @@
+// Derived in part from herdrdev/herdr `src/ui/panes.rs` (the selection
+// highlight: `automatic_selection_bg`, `selection_fg_for_bg`, and the test
+// `selection_highlight_uses_one_uniform_style`) at
+// ee5bfb5041bb3e4a49d591c72308aae3c81ecdde (Apache-2.0). Modified by 2lab:
+// `Theme::selection_on` takes the host's background and colour level as
+// arguments (the maths lives in `color.rs`) and falls back to REVERSED under
+// mono, 16 colours or an unknown background.
+
 //! Semantic colours and motion, shared by every widget.
 //!
 //! The token names follow `@2lab.ai/ui` (`text`, `text-secondary`, `border`,
