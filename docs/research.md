@@ -164,7 +164,7 @@ What we left out: copy-mode motions, link hover, the tab surface and pane resizi
 server; shared pane borders are mostly ratatui 0.30's own `Block::merge_borders`.
 
 The full inventory (26 patterns, with file and line) and the twelve health-check findings are in
-[docs/research/herdr-inventory.md](https://github.com/2lab-ai/tui/blob/main/docs/research/herdr-inventory.md).
+[herdr audit](/tui/docs/herdr-audit) (source: [docs/research/herdr-inventory.md](https://github.com/2lab-ai/tui/blob/main/docs/research/herdr-inventory.md)).
 
 ## The rules every widget keeps
 
@@ -270,7 +270,7 @@ Every catalog entry was checked against llmux's dashboard (`eec32c9`), with 80×
 daemon. The data cells already match the catalog; what people hit are prompts that forget what they ask about after
 5 seconds, a logs view that cannot scroll, popups sized by percentage, and status messages cut at 80 columns. The plan
 puts each entry in one of three batches — prompts; viewers and overlays; feedback and data — or says why it waits.
-The audit is in [docs/research/llmux-audit.md](https://github.com/2lab-ai/tui/blob/main/docs/research/llmux-audit.md);
+The audit is the [llmux audit](/tui/docs/llmux-audit) page (source: [docs/research/llmux-audit.md](https://github.com/2lab-ai/tui/blob/main/docs/research/llmux-audit.md));
 the plan itself lives in llmux, in `docs/tui-catalog-plan.md`.
 
 ## What we left out, and why

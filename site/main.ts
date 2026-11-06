@@ -1,4 +1,6 @@
 import { marked } from 'marked';
+import herdrAudit from '../docs/research/herdr-inventory.md?raw';
+import llmuxAudit from '../docs/research/llmux-audit.md?raw';
 import research from '../docs/research.md?raw';
 import notice from '../NOTICE?raw';
 import wasmUrl from './catalog.wasm?url';
@@ -64,7 +66,13 @@ const GROUP_NOTE: Record<CompDoc['group'], string> = {
   Input: 'what the person types, picks or presses',
   Primitives: 'the pieces the others share',
 };
-const PROJECT: Record<string, string> = { llmux: 'llmux', codex: 'OpenAI Codex', fx: 'Vercel fx', herdr: 'herdr', '2lab': '2lab' };
+const PROJECT: Record<string, string> = {
+  llmux: 'llmux',
+  codex: 'OpenAI Codex',
+  fx: 'Vercel fx',
+  herdr: 'herdr',
+  '2lab': '2lab',
+};
 
 // ── view state (kept across pages) ──
 
@@ -212,7 +220,7 @@ function shell(active: string, body: string): string {
     <h4>Getting started</h4>
     ${link('/', 'Introduction')}${link('/docs/installation', 'Installation')}${link('/docs/theming', 'Theming')}
     <h4>Background</h4>
-    ${link('/docs/research', 'Research', '<small>report</small>')}${link('/docs/licences', 'Sources and licences')}
+    ${link('/docs/research', 'Research', '<small>report</small>')}${link('/docs/herdr-audit', 'herdr audit')}${link('/docs/llmux-audit', 'llmux audit')}${link('/docs/licences', 'Sources and licences')}
     ${groups}
   </aside>
   <main id="main" tabindex="-1"><div class="page">${body}
@@ -413,8 +421,8 @@ function themingPage(): string {
   <p class="desc">Under <code>Motion::Reduced</code> a spinner holds its first glyph and a shimmer draws plain bold text. Clocks still count — reduced motion stops movement, not information.</p>`;
 }
 
-function researchPage(): string {
-  return `<div class="crumb">Background</div><article class="md">${marked.parse(research, { async: false })}</article>`;
+function researchPage(src: string = research): string {
+  return `<div class="crumb">Background</div><article class="md">${marked.parse(src, { async: false })}</article>`;
 }
 
 function licencesPage(): string {
@@ -516,6 +524,12 @@ function route(): void {
   } else if (path === '/docs/research') {
     body = researchPage();
     document.title = 'Research — 2lab/tui';
+  } else if (path === '/docs/herdr-audit') {
+    body = researchPage(herdrAudit);
+    document.title = 'herdr audit — 2lab/tui';
+  } else if (path === '/docs/llmux-audit') {
+    body = researchPage(llmuxAudit);
+    document.title = 'llmux audit — 2lab/tui';
   } else if (path === '/docs/licences') {
     body = licencesPage();
     document.title = 'Sources and licences — 2lab/tui';
