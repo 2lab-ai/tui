@@ -1,10 +1,12 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
+use ratatui::widgets::{StatefulWidget, Widget};
 
-use super::{HintGroup, KeyHelp, KeyHint, KeyHints};
-use crate::catalog::{ComponentDoc, DemoCx, DemoDoc, FnDemo, Group, PropDoc, Source};
+use super::{HintGroup, KeyHelp, KeyHelpState, KeyHint, KeyHints};
+use crate::catalog::{ComponentDoc, Demo, DemoCx, DemoDoc, FnDemo, Group, PropDoc, Source};
+use crate::composer::{Composer, ComposerEvent, ComposerState};
+use crate::input::KeyInput;
 use crate::text;
 
 const USAGE: &str = r#"use twolab_tui::key_hints::{KeyHint, KeyHints};
@@ -18,7 +20,12 @@ let footer = KeyHints::new([
 .title("accounts")
 .theme(theme);
 // Drops `o sort` first when it runs out of room, then says `… ? more`.
-frame.render_widget(&footer, footer_area);"#;
+frame.render_widget(&footer, footer_area);
+
+// `?` help: filtered by what the person typed, scrolling when it is tall.
+let help = KeyHelp::new(groups).filter(query.text()).theme(theme);
+frame.render_stateful_widget(&help, body, &mut help_state); // lines 8–14 of 31
+help_state.on_key(key); // ↑↓ PgUp PgDn Home End"#;
 
 /// llmux's accounts keybar (`draw_footer`, `Overlay::Accounts`), with the
 /// priorities a person would keep longest.
@@ -91,8 +98,9 @@ fn composer(area: Rect, buf: &mut Buffer, cx: &DemoCx) {
     footer_at(buf, area, area.y.saturating_add(3), 44, &h);
 }
 
-fn help(area: Rect, buf: &mut Buffer, cx: &DemoCx) {
-    KeyHelp::new([
+/// llmux's `?` help, by group.
+fn llmux_groups() -> Vec<HintGroup<'static>> {
+    vec![
         HintGroup::new(
             "Navigate",
             [
@@ -126,9 +134,88 @@ fn help(area: Rect, buf: &mut Buffer, cx: &DemoCx) {
                 KeyHint::new("q", "quit"),
             ],
         ),
-    ])
-    .theme(cx.theme)
-    .render(area, buf);
+    ]
+}
+
+fn help(area: Rect, buf: &mut Buffer, cx: &DemoCx) {
+    Widget::render(KeyHelp::new(llmux_groups()).theme(cx.theme), area, buf);
+}
+
+/// The help grid under a one-line filter field: type to filter, ↑↓ PgUp
+/// PgDn to scroll.
+struct FilterHelp {
+    query: ComposerState,
+    scroll: KeyHelpState,
+}
+
+impl FilterHelp {
+    fn new() -> FilterHelp {
+        FilterHelp {
+            query: ComposerState::new().single_line(),
+            scroll: KeyHelpState::new(),
+        }
+    }
+}
+
+impl Demo for FilterHelp {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &DemoCx) {
+        if area.is_empty() {
+            return;
+        }
+        let t = &cx.theme;
+        let field = Composer::new()
+            .prompt("/")
+            .placeholder("filter by key or description")
+            .theme(*t);
+        let w = area.width.min(40);
+        StatefulWidget::render(
+            &field,
+            Rect::new(area.x, area.y, w, 1),
+            buf,
+            &mut self.query,
+        );
+        let help = KeyHelp::new(llmux_groups())
+            .filter(self.query.text())
+            .columns(2)
+            .theme(*t);
+        if area.height > 1 {
+            let count = format!("{} shortcuts", help.matches());
+            let cw = text::width(&count) as u16;
+            if area.width >= w + cw + 2 {
+                buf.set_string(area.right() - cw, area.y, &count, t.dim());
+            }
+            let body = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
+            StatefulWidget::render(&help, body, buf, &mut self.scroll);
+        }
+    }
+
+    fn key(&mut self, key: KeyInput) -> bool {
+        match self.query.key(key, 40) {
+            ComposerEvent::Ignored => self.scroll.on_key(key),
+            ComposerEvent::Edited => {
+                self.scroll.scroll = 0;
+                true
+            }
+            _ => true,
+        }
+    }
+}
+
+fn filtered(area: Rect, buf: &mut Buffer, cx: &DemoCx) {
+    let t = &cx.theme;
+    let mut y = area.y;
+    for q in ["re", "zz"] {
+        if y >= area.bottom() {
+            break;
+        }
+        label(buf, area, y, &format!("filter(\"{q}\")"), cx);
+        let help = KeyHelp::new(llmux_groups()).filter(q).theme(*t);
+        let h = help
+            .height(area.width)
+            .min(area.bottom().saturating_sub(y + 1));
+        Widget::render(&help, Rect::new(area.x, y + 1, area.width, h), buf);
+        y += h + 2;
+    }
 }
 
 pub(crate) const DOC: ComponentDoc = ComponentDoc {
@@ -136,7 +223,7 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
     name: "Key hints",
     ty: "twolab_tui::key_hints::KeyHints",
     summary: "Which keys do something here, and what each one does.",
-    description: "A footer of key hints that fits its width: when it runs out of room it drops whole hints, lowest priority first, and ends with … ? more so the person knows where the rest are — never half a hint clipped mid-word. KeyHelp lays every shortcut out by group in three, two or one aligned columns and counts what does not fit. Keys are plain text (ctrl+c, esc, ↑↓) with an ASCII fallback for the arrows, which are East-Asian Ambiguous width; key matching smooths over terminals that send raw control bytes.",
+    description: "A footer of key hints that fits its width: when it runs out of room it drops whole hints, lowest priority first, and ends with … ? more so the person knows where the rest are — never half a hint clipped mid-word. KeyHelp lays every shortcut out by group in three, two or one aligned columns and counts what does not fit; filtered by a query (herdr's keybind help) it keeps the shortcuts whose key or description match, says no keys match \"q\" when none do, and scrolls with a lines a–b of n position when it is taller than its area. Keys are plain text (ctrl+c, esc, ↑↓) with an ASCII fallback for the arrows, which are East-Asian Ambiguous width; key matching smooths over terminals that send raw control bytes.",
     used_in: "llmux dashboard keybars (accounts, stats, logs) and its ? help; agent composer footers.",
     source: Source {
         project: "codex",
@@ -213,19 +300,38 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
             description: "The help grid; .columns(n) (3), .gap(n) (4), .lines(width), .height(width).",
         },
         PropDoc {
+            name: "KeyHelp::filter(query) / .matches()",
+            ty: "impl Into<Cow<str>> / usize",
+            default: Some("\"\""),
+            description: "Only shortcuts whose keys (as written or drawn) or description contain the query, ignoring case; empty groups go; none: no keys match \"query\".",
+        },
+        PropDoc {
+            name: "render_stateful_widget(&help, area, &mut KeyHelpState)",
+            ty: "KeyHelpState",
+            default: None,
+            description: "Scrolls a grid taller than its area; the last row says lines a–b of n. on_key(↑↓ PgUp PgDn Home End), shown(), max_scroll().",
+        },
+        PropDoc {
             name: "is_press(binding, event) / normalize(key)",
             ty: "KeyInput",
             default: None,
             description: "Match keys across terminals: raw C0 bytes as Ctrl chords, uppercase as Shift, Shift+Tab as BackTab.",
         },
     ],
-    keyboard: &[(
-        "? (host-bound)",
-        "The key the overflow marker names; the host opens KeyHelp with it.",
-    )],
+    keyboard: &[
+        (
+            "? (host-bound)",
+            "The key the overflow marker names; the host opens KeyHelp with it.",
+        ),
+        (
+            "↑ / ↓, PgUp / PgDn, Home / End (KeyHelpState)",
+            "Scroll the help grid by a row, a page, or to an end",
+        ),
+    ],
     a11y: &[
         "Whole hints only: a key is never shown without its action, or cut mid-word.",
-        "Dropped hints are announced (… ? more, or … +N more), and KeyHelp counts shortcuts below the fold.",
+        "Dropped hints are announced (… ? more, or … +N more), and KeyHelp counts shortcuts below the fold or, scrolling, says lines a–b of n.",
+        "A filter that matches nothing says so and repeats the query, rather than showing an empty box.",
         "Keys differ from labels by weight as well as colour, so mono (NO_COLOR) keeps them apart.",
         "Arrows are East-Asian Ambiguous; KeyGlyphs::Ascii keeps a footer's width exact on CJK terminals.",
     ],
@@ -260,6 +366,26 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
             animated: false,
             interactive: false,
             make: || Box::new(FnDemo(help)),
+        },
+        DemoDoc {
+            id: "filter",
+            title: "Filter and scroll the help",
+            description: "Type to filter by key or description; ↑↓ PgUp PgDn scroll the grid, whose last row says where it is.",
+            cols: 72,
+            rows: 10,
+            animated: false,
+            interactive: true,
+            make: || Box::new(FilterHelp::new()),
+        },
+        DemoDoc {
+            id: "filtered",
+            title: "Filtered: a match and no match",
+            description: "filter(\"re\") keeps remove, refresh, redeem and their groups; filter(\"zz\") says no keys match.",
+            cols: 96,
+            rows: 10,
+            animated: false,
+            interactive: false,
+            make: || Box::new(FnDemo(filtered)),
         },
     ],
 };

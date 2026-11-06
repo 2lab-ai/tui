@@ -6,6 +6,14 @@
 // are plain text (`ctrl+c`, `esc`, `↑↓`) with an ASCII fallback for the
 // arrows; the footer drops the lowest-priority hints first and says so; the
 // grid takes any number of groups; colours come from the theme.
+//
+// The help grid's filter is derived from herdrdev/herdr
+// `src/input/keybind_help.rs` (`filter_keybind_help_groups`) and its scroll
+// from `src/client/shell/overlays.rs` (`render_help_overlay`) at
+// ee5bfb5041bb3e4a49d591c72308aae3c81ecdde (Apache-2.0). Modified by 2lab: the
+// scroll range is the grid's own row count, not an estimate from character
+// counts; the key column is measured in cells; an empty result names the
+// query; a position line says where the view is.
 
 //! What you can press now: a footer line that fits its width, and a help
 //! grid of every shortcut by group.
@@ -23,6 +31,12 @@
 //! `unicode-width`, but two on many CJK terminals, which would push a fitted
 //! footer past its edge there. [`KeyGlyphs::Ascii`] spells them out (`up`,
 //! `down`, `up/down`) for those hosts.
+//!
+//! [`KeyHelp::filter`] narrows the grid to the shortcuts whose keys or
+//! description contain a query, ignoring case (herdr's keybind help); groups
+//! left empty go, and when nothing matches the grid says `no keys match
+//! "<query>"`. Drawn with a [`KeyHelpState`], a grid taller than its area
+//! scrolls and its last row says where the view is: `lines 8–14 of 31`.
 
 #[cfg(feature = "catalog")]
 pub(crate) mod docs;
@@ -33,7 +47,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
+use ratatui::widgets::{StatefulWidget, Widget};
 
 use crate::input::{Key, KeyInput, Mods};
 use crate::text::{self, ELLIPSIS};
@@ -517,6 +531,7 @@ impl<'a> HintGroup<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeyHelp<'a> {
     groups: Vec<HintGroup<'a>>,
+    query: Cow<'a, str>,
     columns: usize,
     gap: usize,
     glyphs: KeyGlyphs,
@@ -530,11 +545,62 @@ impl<'a> KeyHelp<'a> {
     pub fn new(groups: impl IntoIterator<Item = HintGroup<'a>>) -> KeyHelp<'a> {
         KeyHelp {
             groups: groups.into_iter().collect(),
+            query: Cow::Borrowed(""),
             columns: 3,
             gap: 4,
             glyphs: KeyGlyphs::Unicode,
             theme: Theme::default(),
         }
+    }
+
+    /// Only the shortcuts whose keys (as written or as drawn) or description
+    /// contain `query`, ignoring case; group titles are not searched (herdr
+    /// `filter_keybind_help_groups`). Empty: every shortcut.
+    pub fn filter(mut self, query: impl Into<Cow<'a, str>>) -> KeyHelp<'a> {
+        self.query = query.into();
+        self
+    }
+
+    /// How many shortcuts the filter keeps.
+    pub fn matches(&self) -> usize {
+        self.shown_groups().iter().map(|g| g.hints.len()).sum()
+    }
+
+    /// The groups with only the shortcuts that match, empty groups gone.
+    fn shown_groups(&self) -> Vec<HintGroup<'a>> {
+        if self.query.is_empty() {
+            return self.groups.clone();
+        }
+        let q = self.query.to_lowercase();
+        let hit = |h: &KeyHint<'_>| {
+            h.keys.to_lowercase().contains(&q)
+                || keys_text(&h.keys, self.glyphs).to_lowercase().contains(&q)
+                || h.label.to_lowercase().contains(&q)
+        };
+        self.groups
+            .iter()
+            .filter_map(|g| {
+                let hints: Vec<KeyHint<'a>> = g.hints.iter().filter(|h| hit(h)).cloned().collect();
+                (!hints.is_empty()).then(|| HintGroup {
+                    title: g.title.clone(),
+                    hints,
+                })
+            })
+            .collect()
+    }
+
+    /// `no keys match "<query>"`, the query cut so the closing quote stays.
+    fn no_match(&self, width: usize) -> Line<'static> {
+        let frame = text::width("no keys match \"\"");
+        let msg = if width > frame {
+            format!(
+                "no keys match \"{}\"",
+                text::truncate(&self.query, width - frame)
+            )
+        } else {
+            text::truncate(&format!("no keys match \"{}\"", self.query), width).into_owned()
+        };
+        Line::from(Span::styled(msg, self.theme.dim()))
     }
 
     /// Most columns. Default 3.
@@ -601,8 +667,12 @@ impl<'a> KeyHelp<'a> {
 
     fn rows(&self, width: u16) -> Vec<Row> {
         let width = width.max(1) as usize;
-        let blocks: Vec<Vec<Row>> = self.groups.iter().map(|g| self.block(g)).collect();
+        let groups = self.shown_groups();
+        let blocks: Vec<Vec<Row>> = groups.iter().map(|g| self.block(g)).collect();
         if blocks.is_empty() {
+            if !self.query.is_empty() && !self.groups.is_empty() {
+                return vec![(self.no_match(width), 0)];
+            }
             return Vec::new();
         }
         let widths: Vec<usize> = blocks
@@ -711,7 +781,7 @@ fn partition(heights: &[usize], k: usize) -> Vec<std::ops::Range<usize>> {
 
 impl Widget for KeyHelp<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        (&self).render(area, buf);
+        Widget::render(&self, area, buf);
     }
 }
 
@@ -736,6 +806,111 @@ impl Widget for &KeyHelp<'_> {
         for (i, (line, _)) in rows.iter().enumerate() {
             let line = text::truncate_line(line.clone(), area.width as usize);
             buf.set_line(area.x, area.y + i as u16, &line, area.width);
+        }
+    }
+}
+
+/// Where a scrolling [`KeyHelp`] is, kept by the host between frames.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeyHelpState {
+    /// The first grid row in view.
+    pub scroll: usize,
+    max_scroll: Option<usize>,
+    page: usize,
+    shown: Option<(usize, usize, usize)>,
+}
+
+impl KeyHelpState {
+    pub fn new() -> KeyHelpState {
+        KeyHelpState::default()
+    }
+
+    /// ↑↓ a row, PgUp/PgDn a page, Home/End the ends; returns whether the
+    /// view moved. Letters are left to the host — a filter field types them.
+    /// Before the first render End goes as far as it can and the render
+    /// clamps it.
+    pub fn on_key(&mut self, key: KeyInput) -> bool {
+        let page = self.page.max(1);
+        let max = self.max_scroll.unwrap_or(usize::MAX);
+        let to = match key.key {
+            Key::Up => self.scroll.saturating_sub(1),
+            Key::Down => self.scroll.saturating_add(1),
+            Key::PageUp => self.scroll.saturating_sub(page),
+            Key::PageDown => self.scroll.saturating_add(page),
+            Key::Home => 0,
+            Key::End => max,
+            _ => return false,
+        }
+        .min(max);
+        let moved = to != self.scroll;
+        self.scroll = to;
+        moved
+    }
+
+    /// `(first row, last row, total rows)`, 1-based, from the last render;
+    /// `None` before one or when the grid is empty.
+    pub fn shown(&self) -> Option<(usize, usize, usize)> {
+        self.shown
+    }
+
+    /// The furthest `scroll` can go at the last render's size.
+    pub fn max_scroll(&self) -> Option<usize> {
+        self.max_scroll
+    }
+}
+
+impl StatefulWidget for KeyHelp<'_> {
+    type State = KeyHelpState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut KeyHelpState) {
+        StatefulWidget::render(&self, area, buf, state);
+    }
+}
+
+/// The grid scrolled to `state.scroll`. When it is taller than the area the
+/// last row says `lines a–b of n`; the range is the grid's own rows, so the
+/// end is exact (herdr estimated it and could scroll past the end or stop
+/// short of it).
+impl StatefulWidget for &KeyHelp<'_> {
+    type State = KeyHelpState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut KeyHelpState) {
+        if area.is_empty() {
+            return;
+        }
+        let rows = self.rows(area.width);
+        let n = rows.len();
+        let h = area.height as usize;
+        let overflow = n > h;
+        // An overflowing grid gives its last row to the position.
+        let body = if overflow { h - 1 } else { h };
+        let max = if overflow { n - body } else { 0 };
+        state.scroll = state.scroll.min(max);
+        state.max_scroll = Some(max);
+        state.page = body.max(1);
+        let first = state.scroll;
+        let last = (first + body).min(n);
+        state.shown = (last > first).then_some((first + 1, last, n));
+        for (i, (line, _)) in rows[first..last].iter().enumerate() {
+            let line = text::truncate_line(line.clone(), area.width as usize);
+            buf.set_line(area.x, area.y + i as u16, &line, area.width);
+        }
+        if overflow {
+            let at = if body == 0 {
+                format!("{n} lines")
+            } else {
+                format!("lines {}\u{2013}{} of {n}", first + 1, last)
+            };
+            let w = area.width as usize;
+            let pos = text::truncate(&at, w).into_owned();
+            let pos_w = text::width(&pos);
+            buf.set_stringn(
+                area.right() - pos_w as u16,
+                area.bottom() - 1,
+                &pos,
+                pos_w,
+                self.theme.secondary(),
+            );
         }
     }
 }
@@ -1059,7 +1234,7 @@ mod tests {
     fn help_text(h: &KeyHelp, w: u16, rows: u16) -> String {
         let area = Rect::new(0, 0, w, rows);
         let mut buf = Buffer::empty(area);
-        h.render(area, &mut buf);
+        Widget::render(h, area, &mut buf);
         snapshot::text(&buf)
     }
 
@@ -1101,6 +1276,133 @@ tab        next panel    r  remove
             let _ = help_text(&help(), w, h);
         }
         assert_eq!(help_text(&KeyHelp::new([]), 10, 2), "\n");
+    }
+
+    /// herdr `keybind_help.rs` `filter_matches_labels_and_shortcuts_case_insensitively`.
+    #[test]
+    fn the_filter_matches_keys_and_descriptions_ignoring_case() {
+        let groups = || {
+            KeyHelp::new([
+                HintGroup::new(
+                    "workspaces / tabs",
+                    [
+                        KeyHint::new("w", "workspace navigation"),
+                        KeyHint::new("c", "new tab"),
+                    ],
+                ),
+                HintGroup::new(
+                    "panes",
+                    [
+                        KeyHint::new("v", "split vertical"),
+                        KeyHint::new("x", "close pane"),
+                    ],
+                ),
+            ])
+        };
+        let work = groups().filter("WoRk");
+        assert_eq!(work.matches(), 1);
+        assert_eq!(
+            work.lines(80)
+                .iter()
+                .map(|l| l.to_string())
+                .collect::<Vec<_>>(),
+            ["workspaces / tabs", "w  workspace navigation"]
+        );
+        let x = groups().filter("x");
+        assert_eq!(x.matches(), 1);
+        assert_eq!(x.lines(80)[1].to_string(), "x  close pane");
+        // Group titles are not searched.
+        let panes = groups().filter("panes");
+        assert_eq!(panes.matches(), 0);
+        assert_eq!(help_text(&panes, 40, 2), "no keys match \"panes\"\n");
+        assert_eq!(groups().filter("").matches(), 4);
+    }
+
+    #[test]
+    fn an_empty_result_names_the_query_and_keeps_its_quotes() {
+        let h = help().filter("zz").theme(Theme::mono());
+        assert_eq!(h.height(40), 1);
+        assert_eq!(help_text(&h, 18, 1), "no keys match \"zz\"");
+        assert_eq!(help_text(&h, 17, 1), "no keys match \"…\"");
+        assert_eq!(help_text(&h, 6, 1), "no ke…");
+        let area = Rect::new(0, 0, 30, 2);
+        let mut buf = Buffer::empty(area);
+        Widget::render(&h, area, &mut buf);
+        assert!(buf[(0, 0)].modifier.contains(Modifier::DIM));
+        // No groups at all is still a blank grid, not a "no match".
+        assert_eq!(KeyHelp::new([]).filter("q").height(20), 0);
+    }
+
+    #[test]
+    fn the_filter_searches_keys_as_drawn() {
+        let h = help().glyphs(KeyGlyphs::Ascii).filter("UP");
+        // `↑↓` is drawn `up/down`; `pgup/pgdn` has it too.
+        assert_eq!(h.matches(), 2);
+        assert_eq!(help().filter("up").matches(), 1, "unicode arrows stay ↑↓");
+        assert_eq!(help().filter("↑").matches(), 1);
+    }
+
+    fn scrolled(h: &KeyHelp, st: &mut KeyHelpState, w: u16, rows: u16) -> Vec<String> {
+        let area = Rect::new(0, 0, w, rows);
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(h, area, &mut buf, st);
+        snapshot::lines(&buf)
+    }
+
+    #[test]
+    fn a_tall_grid_scrolls_to_its_exact_end_with_a_position() {
+        // One column at 20 cells: 13 rows in a 6-row area.
+        let h = help();
+        let mut st = KeyHelpState::new();
+        let top = scrolled(&h, &mut st, 20, 6);
+        assert_eq!(top[0], "Navigate");
+        assert_eq!(top[5], format!("{:>20}", "lines 1\u{2013}5 of 13"));
+        assert_eq!(st.max_scroll(), Some(8));
+        assert_eq!(st.shown(), Some((1, 5, 13)));
+        assert!(st.on_key(KeyInput::new(Key::End)));
+        let end = scrolled(&h, &mut st, 20, 6);
+        // The last shortcut on the last body row: no blank rows past the end
+        // and nothing left unreachable (herdr's estimate missed by 1–3 rows).
+        assert_eq!(end[4], "q  quit");
+        assert_eq!(end[5], format!("{:>20}", "lines 9\u{2013}13 of 13"));
+        assert!(!st.on_key(KeyInput::new(Key::Down)), "at the end");
+        assert!(st.on_key(KeyInput::new(Key::PageUp)));
+        assert_eq!(st.scroll, 3);
+        assert!(st.on_key(KeyInput::new(Key::Home)));
+        assert!(!st.on_key(KeyInput::from('k')), "letters are the host's");
+        // A filter that shrinks the grid clamps a scroll that was further.
+        st.scroll = 8;
+        let few = scrolled(&help().filter("a"), &mut st, 20, 6);
+        assert_eq!(st.scroll, st.max_scroll().unwrap());
+        assert!(few.iter().all(|l| text::width(l) <= 20));
+        // Everything fits: no position, scroll pinned at 0.
+        let mut st = KeyHelpState {
+            scroll: 4,
+            ..KeyHelpState::new()
+        };
+        let all = scrolled(&h, &mut st, 80, 6);
+        assert!(!all.iter().any(|l| l.contains("lines")));
+        assert_eq!(st.scroll, 0);
+        // Degenerate sizes do not panic.
+        for (w, r) in [(1, 1), (2, 1), (12, 2), (5, 3)] {
+            scrolled(&h, &mut KeyHelpState::new(), w, r);
+        }
+    }
+
+    /// herdr padded the key column with `{:<N}` (chars); here it is cells.
+    #[test]
+    fn the_key_column_is_measured_in_cells() {
+        let h = KeyHelp::new([HintGroup::new(
+            "한글",
+            [
+                KeyHint::new("가나", "wide keys"),
+                KeyHint::new("abc", "narrow"),
+            ],
+        )]);
+        let lines: Vec<String> = h.lines(40).iter().map(|l| l.to_string()).collect();
+        let col = |l: &str, label: &str| text::width(&l[..l.find(label).unwrap()]);
+        assert_eq!(col(&lines[1], "wide"), col(&lines[2], "narrow"));
+        assert_eq!(col(&lines[1], "wide"), 6);
     }
 
     #[test]
