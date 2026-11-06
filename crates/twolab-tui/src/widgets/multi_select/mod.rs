@@ -421,6 +421,7 @@ impl MultiSelect {
                     description: item.description.clone(),
                     disabled_reason: None,
                     disabled: false,
+                    meta: Vec::new(),
                 }
             })
             .collect()
@@ -503,6 +504,7 @@ impl MultiSelect {
                 display: self.display,
                 desc_col: col,
                 selected: self.state.selected_idx,
+                columns: Vec::new(),
             },
             empty: Line::styled(empty, t.dim().add_modifier(Modifier::ITALIC)),
             tail: vec![self.summary_line(), self.footer_line()],

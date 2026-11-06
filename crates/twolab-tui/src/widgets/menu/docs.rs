@@ -3,7 +3,7 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, StatefulWidget, Widget};
 
-use super::{Menu, MenuAction, MenuItem, MenuState};
+use super::{ATTENTION, Menu, MenuAction, MenuItem, MenuState};
 use crate::catalog::{ComponentDoc, Demo, DemoCx, DemoDoc, FnDemo, Group, PropDoc, Source};
 use crate::input::{Key, KeyInput};
 use crate::text;
@@ -35,7 +35,17 @@ match app.menu.hit(mouse.column, mouse.row) {
     Some(i) => run(i),
     None if !app.menu.layout.contains(mouse.column, mouse.row) => app.menu_open = false,
     None => {}
-}"#;
+}
+
+// herdr's global menu: badges on items, opened above a footer launcher.
+let menu = Menu::new([
+    MenuItem::new("settings").attention(),      // ◉
+    MenuItem::new("update ready").badge("new"),
+    MenuItem::new("detach").key("d"),
+])
+.anchor_above(launcher_rect)
+.theme(theme);
+let label = if menu.has_badge() { "menu ◉" } else { "menu" };"#;
 
 const ACCOUNTS: [(&str, &str, Status, &str); 5] = [
     ("zhuge@2lab.ai", "active", Status::Done, "41%"),
@@ -227,12 +237,139 @@ fn destructive(area: Rect, buf: &mut Buffer, cx: &DemoCx) {
     (&menu).render(bounds, buf, &mut state);
 }
 
+fn global_menu(theme: Theme) -> Menu<'static> {
+    Menu::new([
+        MenuItem::new("settings").attention(),
+        MenuItem::new("keybinds").key("?"),
+        MenuItem::new("reload config").key("r"),
+        MenuItem::new("update ready").badge("new"),
+        MenuItem::separator(),
+        MenuItem::new("detach").key("d"),
+    ])
+    .theme(theme)
+}
+
+const SPACES: [(&str, &str); 4] = [
+    ("llmux", "main · ↑2"),
+    ("tui", "port/herdr-merge-b"),
+    ("herdr", "main"),
+    ("site", "deploy · ↓1"),
+];
+
+/// herdr's sidebar footer: `menu ◉` opens the global menu above itself.
+struct Launcher {
+    state: MenuState,
+    open: bool,
+    said: Option<String>,
+}
+
+impl Demo for Launcher {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &DemoCx) {
+        let t = &cx.theme;
+        if area.is_empty() {
+            return;
+        }
+        let mut lines = vec![Line::from(Span::styled(" spaces", t.dim()))];
+        for (name, branch) in SPACES {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {name:<7}"), t.text()),
+                Span::styled(branch, t.secondary()),
+            ]));
+        }
+        Paragraph::new(lines).render(area, buf);
+        let menu = global_menu(*t);
+        // The launcher says so too when an item has a badge.
+        let launcher = Rect::new(area.x + 1, area.bottom() - 1, 6, 1);
+        let label = if menu.has_badge() {
+            format!("menu {ATTENTION}")
+        } else {
+            "menu".into()
+        };
+        let style = if self.open { t.selected() } else { t.accent() };
+        buf.set_stringn(
+            launcher.x,
+            launcher.y,
+            &label,
+            area.width.saturating_sub(1) as usize,
+            style,
+        );
+        let note = match (&self.said, self.open) {
+            (_, true) => " ↑↓ Enter Esc".to_string(),
+            (Some(said), false) => format!(" {said} · Enter reopens"),
+            (None, false) => " Enter opens the menu".to_string(),
+        };
+        let x = launcher.x + 8;
+        if x < area.right() {
+            let w = (area.right() - x) as usize;
+            buf.set_stringn(x, launcher.y, text::truncate(&note, w), w, t.dim());
+        }
+        if self.open {
+            let bounds = Rect {
+                height: area.height.saturating_sub(1),
+                ..area
+            };
+            (&menu.anchor_above(launcher)).render(bounds, buf, &mut self.state);
+        }
+    }
+
+    fn key(&mut self, key: KeyInput) -> bool {
+        let menu = global_menu(Theme::default());
+        if !self.open {
+            if key.key == Key::Enter {
+                self.open = true;
+                self.state = MenuState::new(&menu);
+                return true;
+            }
+            return false;
+        }
+        match self.state.on_key(&menu, key) {
+            MenuAction::Moved => true,
+            MenuAction::Ignored => false,
+            MenuAction::Run(i) => {
+                self.open = false;
+                self.said = Some(format!("ran {}", menu.items()[i].label));
+                true
+            }
+            MenuAction::Close => {
+                self.open = false;
+                self.said = Some("closed".to_string());
+                true
+            }
+        }
+    }
+}
+
+/// A screen too short for the menu on either side of the clicked row.
+fn short(area: Rect, buf: &mut Buffer, cx: &DemoCx) {
+    let t = &cx.theme;
+    if area.is_empty() {
+        return;
+    }
+    table(area, buf, t);
+    // Right-clicked the fourth account, mid-screen.
+    let row = area.y + (area.height / 2).min(4);
+    let menu = account_menu(*t).anchor(area.x + 20, row);
+    let mut state = MenuState::new(&menu);
+    (&menu).render(area, buf, &mut state);
+    buf.set_stringn(area.x, row, "›", 1, t.accent());
+    let side = if state.layout.above { "above" } else { "below" };
+    let note = format!(
+        " opens {side}, {} rows: the clicked row stays in view",
+        state.layout.area.height
+    );
+    let x = area.x + 38;
+    if x < area.right() {
+        let w = (area.right() - x) as usize;
+        buf.set_stringn(x, row, text::truncate(&note, w), w, t.dim());
+    }
+}
+
 pub(crate) const DOC: ComponentDoc = ComponentDoc {
     slug: "menu",
     name: "Menu",
     ty: "twolab_tui::menu::Menu",
     summary: "What you can do to this thing, right where you clicked.",
-    description: "A popup list anchored at the clicked cell. It opens on the row below and flips above or to the left when the screen runs out, so the row you clicked stays visible. ↑/↓ move over runnable items only (separators and disabled items are skipped), Enter runs, an item's key runs it directly, Esc closes. Every runnable row's rect comes back from the render, measured in cells.",
+    description: "A popup list anchored at the clicked cell. It opens on the row below and flips above or to the left when the screen runs out, so the row you clicked stays visible. ↑/↓ move over runnable items only (separators and disabled items are skipped), Enter runs, an item's key runs it directly, Esc closes. Every runnable row's rect comes back from the render, measured in cells. From herdr's global menu: a per-item attention badge (a glyph or a word, bold in the accent) and opening above a launcher button; when neither side of the anchor holds every item, the popup takes the taller side and scrolls rather than covering the anchor.",
     used_in: "llmux: right-click on an accounts row — switch now, pause or resume, set limit, delete — acting on the account pinned when the menu opened.",
     source: Source {
         project: "llmux",
@@ -259,6 +396,24 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
             ty: "(u16, u16)",
             default: Some("(0, 0)"),
             description: "The clicked cell. The popup opens on the row below, or flips above / left to stay on screen.",
+        },
+        PropDoc {
+            name: "MenuItem::badge(s) / .attention()",
+            ty: "&str",
+            default: Some("none"),
+            description: "Something here wants attention: a glyph or a word after the label (attention() = ◉, East-Asian Narrow), bold in the accent. It stays when the key gives way.",
+        },
+        PropDoc {
+            name: ".anchor_above(rect) / .anchor_below(rect)",
+            ty: "Rect",
+            default: None,
+            description: "A launcher button: open above it (a footer `menu`) or below it (a header button), flipping when there is no room; never over it while one framed item fits on either side.",
+        },
+        PropDoc {
+            name: "menu.has_badge()",
+            ty: "bool",
+            default: None,
+            description: "Whether any item has a badge, so the launcher can say so too (menu ◉).",
         },
         PropDoc {
             name: ".theme(t)",
@@ -300,7 +455,8 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
     ],
     a11y: &[
         "The selected row is reversed and bold; disabled items are dim and destructive ones bold, so all three read without colour.",
-        "Opens beside the clicked row, never over it, so you can see what the menu acts on.",
+        "Opens beside the clicked row, never over it, so you can see what the menu acts on: on a short screen it takes the taller side and scrolls.",
+        "Badges are a glyph or a word (◉, new), bold, so they read without colour.",
         "A menu taller than the screen scrolls to the selection and says how many items are out of view (+N more).",
         "Every action also has a key, shown at the right of its row.",
     ],
@@ -341,6 +497,32 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
             animated: false,
             interactive: false,
             make: || Box::new(FnDemo(destructive)),
+        },
+        DemoDoc {
+            id: "launcher",
+            title: "Global menu above a launcher",
+            description: "herdr's sidebar footer: menu ◉ opens above itself; settings and the update carry badges. ↑/↓, Enter, Esc; Enter reopens.",
+            cols: 48,
+            rows: 12,
+            animated: false,
+            interactive: true,
+            make: || {
+                Box::new(Launcher {
+                    state: MenuState::new(&global_menu(Theme::default())),
+                    open: true,
+                    said: None,
+                })
+            },
+        },
+        DemoDoc {
+            id: "short",
+            title: "Short screen: never over the row",
+            description: "Eight rows, clicked mid-screen: neither side holds the six items, so the menu takes the taller side, scrolls and counts the rest.",
+            cols: 80,
+            rows: 8,
+            animated: false,
+            interactive: false,
+            make: || Box::new(FnDemo(short)),
         },
     ],
 };
