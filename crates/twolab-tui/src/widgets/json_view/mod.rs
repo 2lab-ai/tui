@@ -405,7 +405,10 @@ pub fn wrap_line(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
     rows
 }
 
-/// Scroll position, kept by the host between frames.
+/// Scroll position, kept by the host between frames. It also remembers how
+/// many rows each line wraps to, so a frame over a large body (llmux's raw
+/// viewer shows bodies up to 8 MiB) does not re-measure every line: the
+/// measurement is redone only when the lines or the width change.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JsonViewState {
     /// First visible row (wrapped rows, not source lines).
@@ -413,6 +416,18 @@ pub struct JsonViewState {
     max_scroll: Option<usize>,
     page: usize,
     shown: Option<(usize, usize, usize)>,
+    /// Row starts per line at the last two widths (with and without the
+    /// scrollbar column), most recent first.
+    rows: Vec<RowIndex>,
+}
+
+/// Where each line's first row sits once wrapped at `width`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RowIndex {
+    /// The lines measured: slice address and length, and the width.
+    key: (usize, usize, usize),
+    starts: Vec<usize>,
+    total: usize,
 }
 
 impl JsonViewState {
@@ -447,6 +462,33 @@ impl JsonViewState {
     pub fn max_scroll(&self) -> Option<usize> {
         self.max_scroll
     }
+
+    /// Forget the remembered row counts. Call it when the host edits its
+    /// lines in place (same `Vec`, same length); a new or resized `Vec` is
+    /// noticed on its own.
+    pub fn invalidate(&mut self) {
+        self.rows.clear();
+    }
+
+    /// The row index for `lines` at `width`, measured once per (lines, width).
+    fn index(&mut self, lines: &[Line<'static>], width: usize) -> &RowIndex {
+        let key = (lines.as_ptr() as usize, lines.len(), width);
+        match self.rows.iter().position(|r| r.key == key) {
+            Some(0) => {}
+            Some(i) => self.rows.swap(0, i),
+            None => {
+                let mut starts = Vec::with_capacity(lines.len());
+                let mut total = 0;
+                for l in lines {
+                    starts.push(total);
+                    total += wrapped_rows(l, width);
+                }
+                self.rows.insert(0, RowIndex { key, starts, total });
+                self.rows.truncate(2);
+            }
+        }
+        &self.rows[0]
+    }
 }
 
 /// Scrollable, wrapped, highlighted lines with a position footer and a
@@ -478,10 +520,6 @@ impl<'a> JsonView<'a> {
         self.hints = hints;
         self
     }
-
-    fn rows_at(&self, width: usize) -> Vec<usize> {
-        self.lines.iter().map(|l| wrapped_rows(l, width)).collect()
-    }
 }
 
 impl StatefulWidget for &JsonView<'_> {
@@ -496,13 +534,11 @@ impl StatefulWidget for &JsonView<'_> {
         let view_h = (area.height - u16::from(footer)) as usize;
         // A scrollbar column only when the content overflows without it.
         let mut text_w = area.width as usize;
-        let mut rows = self.rows_at(text_w);
-        let mut total: usize = rows.iter().sum();
+        let mut total = state.index(self.lines, text_w).total;
         let bar = total > view_h && area.width >= 2;
         if bar {
             text_w -= 1;
-            rows = self.rows_at(text_w);
-            total = rows.iter().sum();
+            total = state.index(self.lines, text_w).total;
         }
         let max = total.saturating_sub(view_h);
         state.scroll = state.scroll.min(max);
@@ -510,12 +546,10 @@ impl StatefulWidget for &JsonView<'_> {
         state.page = view_h.saturating_sub(1).max(1);
 
         // The line holding the first visible row, and how far into it.
-        let mut first = 0;
-        let mut skip = state.scroll;
-        while first < rows.len() && skip >= rows[first] {
-            skip -= rows[first];
-            first += 1;
-        }
+        let scroll = state.scroll;
+        let starts = &state.index(self.lines, text_w).starts;
+        let first = starts.partition_point(|&s| s <= scroll).saturating_sub(1);
+        let mut skip = starts.get(first).map_or(0, |s| scroll - s);
         let mut y = area.y;
         let mut last = first;
         let bottom = area.y + view_h as u16;
@@ -781,6 +815,49 @@ mod tests {
         assert!(s.on_key(Key::Home.into()));
         assert_eq!(s.scroll, 0);
         assert!(!s.on_key('x'.into()));
+    }
+
+    #[test]
+    fn row_counts_are_measured_once_per_width() {
+        let lines = numbered(40);
+        let mut s = JsonViewState::default();
+        let first = snapshot::lines(&render(&lines, &mut s, 40, 11));
+        assert_eq!(s.rows.len(), 2, "with and without the scrollbar column");
+        let keys: Vec<_> = s.rows.iter().map(|r| r.key).collect();
+        let again = snapshot::lines(&render(&lines, &mut s, 40, 11));
+        assert_eq!(first, again);
+        assert_eq!(
+            s.rows.iter().map(|r| r.key).collect::<Vec<_>>(),
+            keys,
+            "nothing re-measured"
+        );
+        // A new body is noticed without invalidate().
+        let fewer = numbered(3);
+        let rows = snapshot::lines(&render(&fewer, &mut s, 40, 11));
+        assert_eq!(rows[0], "\"line\": 1");
+        assert_eq!(s.max_scroll(), Some(0));
+        s.invalidate();
+        assert!(s.rows.is_empty());
+    }
+
+    #[test]
+    fn the_first_row_is_found_inside_a_wrapped_line() {
+        let t = Theme::ansi();
+        let long = format!(r#"{{"text":"{}"}}"#, "word ".repeat(60).trim_end());
+        let mut lines = body_lines(&long, &t);
+        lines.extend(numbered(30));
+        let mut s = JsonViewState::default();
+        let full = snapshot::lines(&render(&lines, &mut s, 30, 8));
+        s.scroll = 2;
+        let scrolled = snapshot::lines(&render(&lines, &mut s, 30, 8));
+        // Same text; only the scrollbar thumb (last column) moved.
+        let text = |r: &str| r.chars().take(29).collect::<String>();
+        assert_eq!(
+            text(&scrolled[0]),
+            text(&full[2]),
+            "scrolling two rows starts mid-line"
+        );
+        assert_eq!(text(&scrolled[1]), text(&full[3]));
     }
 
     #[test]
