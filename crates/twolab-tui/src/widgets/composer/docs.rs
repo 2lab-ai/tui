@@ -5,11 +5,13 @@ use ratatui::widgets::StatefulWidget;
 
 use super::{Composer, ComposerEvent, ComposerState, MASK_GLYPH, Mask};
 use crate::catalog::{ComponentDoc, Demo, DemoCx, DemoDoc, Group, PropDoc, Source};
+use crate::color::{ColorLevel, Rgb};
 use crate::input::KeyInput;
 use crate::text;
-use crate::theme::Theme;
+use crate::theme::{Palette, Theme};
 
-const USAGE: &str = r#"use twolab_tui::composer::{Composer, ComposerEvent, ComposerState};
+const USAGE: &str = r#"use twolab_tui::color::{self, ColorLevel};
+use twolab_tui::composer::{Composer, ComposerEvent, ComposerState, Mask};
 
 let composer = Composer::new()
     .placeholder("Ask the agent to change something")
@@ -29,10 +31,14 @@ match state.key(key, input.width) {
     ComposerEvent::SubmittedSecret => {} // only a masked state answers this
 }
 
-// A one-line field with a preset the first key replaces.
+// A one-line field with a preset the first key replaces, drawn in a
+// selection colour made from the terminal's background (OSC 11), or
+// reversed when that is unknown.
 let mut rename = ComposerState::with_text("feat/quota-backoff")
     .single_line()
     .replace_on_type(true);
+let field = Composer::new()
+    .selection_style(theme.selection_on(color::parse_osc_color(&reply), ColorLevel::TrueColor));
 
 // A secret: drawn as ∙ per grapheme, inside the host's own prompt line.
 let mut key = ComposerState::new().masked(Mask::default());
@@ -132,8 +138,19 @@ fn dim_line(buf: &mut Buffer, area: Rect, y: u16, s: &str, t: &Theme) {
     }
 }
 
+/// The terminal background the catalog draws each palette on — what a host
+/// learns from its OSC 11 query. ANSI: the user's theme, so unknown.
+fn host_background(t: &Theme) -> Option<Rgb> {
+    match t.palette {
+        Palette::Dark => Some((0x14, 0x14, 0x16)),
+        Palette::Light => Some((0xfb, 0xfb, 0xfa)),
+        Palette::Ansi | Palette::Mono => None,
+    }
+}
+
 /// A one-line rename field: the suggested name is a preset the first key
-/// replaces, longer than the field, so the window and its `‹ ›` show.
+/// replaces, longer than the field, so the window and its `‹ ›` show. The
+/// preset is drawn in the selection colour made from the host background.
 struct Rename {
     state: ComposerState,
     done: Option<String>,
@@ -161,7 +178,10 @@ impl Demo for Rename {
         self.width = area.width.min(36);
         dim_line(buf, area, area.y, "rename workspace", t);
         let row = if area.height > 1 { area.y + 1 } else { area.y };
-        let composer = Composer::new().placeholder("a name").theme(*t);
+        let composer = Composer::new()
+            .placeholder("a name")
+            .selection_style(t.selection_on(host_background(t), ColorLevel::TrueColor))
+            .theme(*t);
         StatefulWidget::render(
             &composer,
             Rect::new(area.x, row, self.width, 1),
@@ -407,7 +427,7 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
             name: ".selection_style(style)",
             ty: "Style",
             default: Some("theme.selected()"),
-            description: "How a preset is drawn.",
+            description: "How a preset is drawn; theme.selection_on(host_bg, level) makes it from the terminal's background (28 % toward white or black, foreground by contrast, reversed when unknown or NO_COLOR).",
         },
     ],
     keyboard: &[
@@ -473,7 +493,7 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
         DemoDoc {
             id: "single-line",
             title: "A one-line field with a preset",
-            description: "The suggested name is selected: type to replace it, or ←→ to keep and edit it; ‹ › say the field shows part of it. Ctrl+W then Ctrl+Y cuts and puts back.",
+            description: "The suggested name is selected — in Theme::selection_on's colour, made from the terminal background (reversed on ANSI, where it is unknown): type to replace it, or ←→ to keep and edit it; ‹ › say the field shows part of it. Ctrl+W then Ctrl+Y cuts and puts back.",
             cols: 56,
             rows: 4,
             animated: false,
