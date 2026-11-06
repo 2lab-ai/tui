@@ -26,5 +26,6 @@ pub mod spinner;
 pub mod status_bar;
 pub mod status_card;
 pub mod tabs;
+pub mod toast;
 pub mod trend_chart;
 pub mod working;
