@@ -190,15 +190,16 @@ pub(crate) struct Paint<'a> {
     pub display: RowDisplay,
     pub desc_col: usize,
     pub selected: Option<usize>,
-    /// Widths of the meta columns shown at this width, left to right.
-    pub columns: Vec<u16>,
+    /// The meta columns shown at this width, left to right: each one's
+    /// index in the list's columns (and so in a row's `meta`) and width.
+    pub columns: Vec<(usize, u16)>,
 }
 
 /// Cells the meta columns take: each column and the gap before it.
-pub(crate) fn meta_width(columns: &[u16]) -> u16 {
+pub(crate) fn meta_width(columns: &[(usize, u16)]) -> u16 {
     columns
         .iter()
-        .fold(0u16, |w, c| w.saturating_add(c.saturating_add(1)))
+        .fold(0u16, |w, (_, c)| w.saturating_add(c.saturating_add(1)))
 }
 
 /// The meta columns of one row: a gap, then each value padded or cut with
@@ -210,14 +211,16 @@ fn paint_meta(area: Rect, buf: &mut Buffer, row: &Row, selected: bool, p: &Paint
     let t = p.theme;
     let dis = row.disabled;
     let mut spans = Vec::with_capacity(p.columns.len() * 2);
-    for (i, w) in p.columns.iter().enumerate() {
+    // A hidden column leaves its value out: each shown column draws the
+    // value at its own index, not at its place among the shown ones.
+    for &(i, w) in &p.columns {
         spans.push(Span::raw(" "));
         let (value, part) = match row.meta.get(i) {
             Some(v) => (v.as_str(), Part::Secondary),
             None => ("—", Part::Keep(t.dim())),
         };
         spans.push(Span::styled(
-            text::pad(value, *w as usize, text::Align::Left),
+            text::pad(value, usize::from(w), text::Align::Left),
             style(t, part, selected, dis),
         ));
     }

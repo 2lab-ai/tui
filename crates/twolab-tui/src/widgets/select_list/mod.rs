@@ -970,13 +970,16 @@ impl SelectList {
         })
     }
 
-    /// Widths of the meta columns that show on a row `width` cells wide.
-    fn shown_columns(&self, width: u16) -> Vec<u16> {
-        let cols: Vec<u16> = self
+    /// The meta columns that show on a row `width` cells wide: each one's
+    /// index among all the columns (where its values are in a row's meta)
+    /// and its width.
+    fn shown_columns(&self, width: u16) -> Vec<(usize, u16)> {
+        let cols: Vec<(usize, u16)> = self
             .columns
             .iter()
-            .filter(|c| width >= c.min_width)
-            .map(|c| c.width)
+            .enumerate()
+            .filter(|(_, c)| width >= c.min_width)
+            .map(|(i, c)| (i, c.width))
             .collect();
         // Never all of the row: the name keeps a few cells.
         if rows::meta_width(&cols).saturating_add(8) > width {
@@ -1459,6 +1462,32 @@ mod tests {
         let mut buf = Buffer::empty(area);
         Renderable::render(&list, area, &mut buf);
         assert!(buf[(60, 3)].modifier.contains(Modifier::REVERSED));
+    }
+
+    /// Review #4: a wide first column hidden at a width where the second
+    /// shows. The second column's slot drew the first one's value.
+    #[test]
+    fn a_shown_column_keeps_its_own_values_when_an_earlier_one_hides() {
+        let list = SelectList::new(vec![
+            SelectItem::new("claude").meta(["hidden-agent", "visible-state"]),
+        ])
+        .numbered(false)
+        .theme(Theme::ansi())
+        .columns([
+            Column::new(13).min_width(100),
+            Column::new(13).min_width(20),
+        ]);
+        let lines = draw(&list, 40, list.desired_height(40));
+        let row = lines
+            .iter()
+            .find(|l| l.contains("claude"))
+            .expect("the row");
+        assert!(row.ends_with("visible-state"), "{row:?}");
+        assert!(!row.contains("hidden-agent"), "{row:?}");
+        // Both show when the row is wide enough, in their own order.
+        let lines = draw(&list, 100, list.desired_height(100));
+        let row = lines.iter().find(|l| l.contains("claude")).expect("row");
+        assert!(row.ends_with("hidden-agent  visible-state"), "{row:?}");
     }
 
     #[test]
