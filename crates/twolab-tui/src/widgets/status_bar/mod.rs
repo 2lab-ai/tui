@@ -361,6 +361,57 @@ impl StatusBar {
     }
 }
 
+impl StatusBar {
+    /// Where each segment that [`StatusBar::line`] keeps is drawn in `area`'s
+    /// first row: `(segment index, rect)`, left to right, clipped to what is
+    /// visible. A host that makes segments clickable (llmux's settings bar)
+    /// pushes these into a [`crate::hit::HitMap`]; a dropped segment has no
+    /// rect, so a click can never land on something that is not there.
+    pub fn hits(&self, area: Rect) -> Vec<(usize, Rect)> {
+        if area.is_empty() {
+            return Vec::new();
+        }
+        let layout = self.layout(area.width);
+        if layout.alone {
+            return Vec::new();
+        }
+        let w = usize::from(area.width);
+        let right_w = layout
+            .right
+            .as_deref()
+            .filter(|r| !r.is_empty())
+            .map_or(0, text::width);
+        let budget = if right_w > 0 {
+            w.saturating_sub(right_w + GAP)
+        } else {
+            w
+        };
+        let sep = text::width(&self.separator);
+        let mut x = 0usize;
+        let mut out = Vec::with_capacity(layout.kept.len());
+        for (n, &i) in layout.kept.iter().enumerate() {
+            if n > 0 {
+                x += sep;
+            }
+            let seg_w = text::width(&self.segments[i].text).min(budget.saturating_sub(x));
+            if seg_w == 0 {
+                break;
+            }
+            out.push((
+                i,
+                Rect {
+                    x: area.x + x as u16,
+                    y: area.y,
+                    width: seg_w as u16,
+                    height: 1,
+                },
+            ));
+            x += seg_w;
+        }
+        out
+    }
+}
+
 impl Widget for &StatusBar {
     /// Draws on the area's first row.
     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -495,6 +546,35 @@ mod tests {
         for w in 0..60u16 {
             assert!(text::line_width(&b.line(w)) <= usize::from(w), "{w}");
         }
+    }
+
+    #[test]
+    fn hit_rects_follow_the_kept_segments() {
+        let bar = StatusBar::new(Theme::ansi())
+            .segment(Segment::new("f filter").priority(3))
+            .segment(Segment::new("m mode").priority(1))
+            .segment(Segment::new("e effort").priority(2));
+        let area = Rect::new(2, 5, 40, 1);
+        let hits = bar.hits(area);
+        let line = text_of(&bar, 40);
+        assert_eq!(line, "f filter · m mode · e effort");
+        assert_eq!(
+            hits,
+            vec![
+                (0, Rect::new(2, 5, 8, 1)),
+                (1, Rect::new(13, 5, 6, 1)),
+                (2, Rect::new(22, 5, 8, 1)),
+            ]
+        );
+        // Each rect covers exactly its segment's text on the drawn row.
+        for (i, r) in &hits {
+            let x0 = usize::from(r.x - area.x);
+            let drawn: String = line.chars().skip(x0).take(usize::from(r.width)).collect();
+            assert_eq!(drawn, ["f filter", "m mode", "e effort"][*i]);
+        }
+        // Narrow: `m mode` (lowest) is dropped and has no rect.
+        let narrow = bar.hits(Rect::new(0, 0, 20, 1));
+        assert_eq!(narrow.iter().map(|h| h.0).collect::<Vec<_>>(), vec![0, 2]);
     }
 
     #[test]
