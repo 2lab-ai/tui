@@ -10,6 +10,24 @@
 // label; one hint row; glyphs are configurable and Narrow by default; styles
 // come from the `Theme`. The transcript and analytics overlays stay behind.
 
+// Drag selection derived from herdrdev/herdr `src/selection.rs` (`Phase`,
+// `Selection::{anchor, drag, finish, ordered, visible_rects, contains}` and
+// their tests), `src/client/shell/mouse.rs` (`selection_edge_scroll_lines`)
+// and `src/ui/panes.rs` (`render_selection_highlight`); `notes` derived from
+// `src/ui/release_notes.rs` (`release_notes_inline_spans`,
+// `release_notes_lines` and their tests); at
+// ee5bfb5041bb3e4a49d591c72308aae3c81ecdde (Apache-2.0). Modified by 2lab:
+// rows are content rows of the pager (herdr: scrollback rows of a terminal
+// pane); the selected text is read from the drawn cells grapheme by grapheme,
+// a wide glyph whole; double-click selects a word locally (herdr asks its
+// server); edge autoscroll happens per drag event, the host repeating the
+// last drag on its own timer (no clock here); the highlight style is a
+// builder option (REVERSED by default) instead of a colour mixed from the
+// host background; clipboard writing is left to `crate::osc52`. `notes`
+// measures nothing itself (herdr's per-line `chars().count()` widths were
+// unused and wrong for wide text), takes `#` to `###` headings and indented
+// bullets, and its default bullet and gutter glyphs are East-Asian Narrow.
+
 //! The full text, scrollable: a request body, a log, a transcript.
 //!
 //! Ported from OpenAI Codex `pager_overlay.rs` (Apache-2.0), the overlay
@@ -29,6 +47,14 @@
 //! a bottom rule with how far down you are, and the keys. Heights are
 //! measured once per width and cached, so a long transcript scrolls without
 //! re-wrapping every line every frame.
+//!
+//! From herdr (Apache-2.0): a mouse drag selects text and the selection
+//! stays on its rows while the pager scrolls ([`Pager::mouse_down`],
+//! [`Pager::mouse_drag`], [`Pager::mouse_up`], [`Pager::select_word`] for a
+//! double-click; at most three highlight rects); [`Pager::selected_text`]
+//! reads it back by cells and [`Pager::copy_sequence`] wraps it in OSC 52.
+//! [`notes`] turns release-notes markdown (`###` headings, `- ` bullets,
+//! `` `code` ``, fenced blocks) into lines for the pager.
 
 #[cfg(feature = "catalog")]
 pub(crate) mod docs;
@@ -36,16 +62,203 @@ pub(crate) mod docs;
 use std::cell::Cell;
 use std::fmt;
 
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::style::Modifier;
+use ratatui::buffer::{Buffer, CellDiffOption, CellWidth};
+use ratatui::layout::{Position, Rect};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::input::{Key, KeyInput};
+use crate::osc52;
 use crate::render::{CachedRenderable, Renderable, render_offset_content};
 use crate::text;
 use crate::theme::Theme;
+
+/// Where a mouse selection is in its life (herdr's `Phase`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionPhase {
+    /// The button is down and has not moved: so far just a click. Nothing
+    /// is highlighted.
+    Anchored,
+    /// The pointer moved off the anchor cell: the cells are highlighted.
+    Dragging,
+    /// Released after a drag (or a double-click word): highlighted, ready
+    /// to copy.
+    Done,
+}
+
+/// A selection in content coordinates: `(row, col)` with the row counted
+/// from the top of the content (not the screen) and the column in cells.
+/// Scrolling the pager does not move it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Selection {
+    anchor: (usize, u16),
+    cursor: (usize, u16),
+    phase: SelectionPhase,
+}
+
+impl Selection {
+    /// A button press at a cell: anchored, not visible yet.
+    pub const fn anchor(row: usize, col: u16) -> Selection {
+        Selection {
+            anchor: (row, col),
+            cursor: (row, col),
+            phase: SelectionPhase::Anchored,
+        }
+    }
+
+    /// A finished selection from `start` to `end`, both cells included, in
+    /// either order (select all, a word, a search hit).
+    pub const fn range(start: (usize, u16), end: (usize, u16)) -> Selection {
+        Selection {
+            anchor: start,
+            cursor: end,
+            phase: SelectionPhase::Done,
+        }
+    }
+
+    /// Extend to `(row, col)` while the button is down; highlighting starts
+    /// once the cursor leaves the anchor cell.
+    pub fn drag(&mut self, row: usize, col: u16) {
+        if self.phase == SelectionPhase::Done {
+            return;
+        }
+        self.cursor = (row, col);
+        if self.cursor != self.anchor {
+            self.phase = SelectionPhase::Dragging;
+        }
+    }
+
+    /// Release: `true` when the person dragged (a selection to copy),
+    /// `false` for a plain click.
+    pub fn finish(&mut self) -> bool {
+        match self.phase {
+            SelectionPhase::Dragging => {
+                self.phase = SelectionPhase::Done;
+                true
+            }
+            SelectionPhase::Done => true,
+            SelectionPhase::Anchored => false,
+        }
+    }
+
+    pub const fn phase(&self) -> SelectionPhase {
+        self.phase
+    }
+
+    /// Highlighted (dragging or done).
+    pub fn is_visible(&self) -> bool {
+        self.phase != SelectionPhase::Anchored
+    }
+
+    /// Pressed and released without moving.
+    pub fn is_just_click(&self) -> bool {
+        self.phase == SelectionPhase::Anchored
+    }
+
+    /// Start and end in reading order.
+    pub fn ordered(&self) -> ((usize, u16), (usize, u16)) {
+        let (a, c) = (self.anchor, self.cursor);
+        if a.0 < c.0 || (a.0 == c.0 && a.1 <= c.1) {
+            (a, c)
+        } else {
+            (c, a)
+        }
+    }
+
+    /// Whether content cell `(row, col)` is selected.
+    pub fn contains(&self, row: usize, col: u16) -> bool {
+        if !self.is_visible() {
+            return false;
+        }
+        let ((sr, sc), (er, ec)) = self.ordered();
+        if row < sr || row > er {
+            false
+        } else if sr == er {
+            col >= sc && col <= ec
+        } else if row == sr {
+            col >= sc
+        } else if row == er {
+            col <= ec
+        } else {
+            true
+        }
+    }
+
+    /// The selected cells inside `view` when content row `top` is its first
+    /// row, as at most three rects (first row, the rows between, last row),
+    /// each clamped inside `view`. Empty rects for parts out of view.
+    pub fn rects(&self, view: Rect, top: usize) -> [Rect; 3] {
+        let mut out = [Rect::default(); 3];
+        if !self.is_visible() || view.is_empty() {
+            return out;
+        }
+        let ((sr, sc), (er, ec)) = self.ordered();
+        let bottom = top + view.height as usize;
+        let rect = |first: usize, end: usize, left: u16, right: u16| {
+            let (first, end) = (first.max(top), end.min(bottom));
+            let (left, right) = (left.min(view.width), right.min(view.width));
+            if first >= end || left >= right {
+                Rect::default()
+            } else {
+                Rect::new(
+                    view.x + left,
+                    view.y + (first - top) as u16,
+                    right - left,
+                    (end - first) as u16,
+                )
+            }
+        };
+        if sr == er {
+            out[0] = rect(sr, sr + 1, sc, ec.saturating_add(1));
+        } else {
+            out[0] = rect(sr, sr + 1, sc, view.width);
+            out[1] = rect(sr + 1, er, 0, view.width);
+            out[2] = rect(er, er + 1, 0, ec.saturating_add(1));
+        }
+        out
+    }
+}
+
+/// Rows to scroll when a drag is `distance` rows past the content's top or
+/// bottom edge: 3 per row of distance, 3 to 15 (herdr's
+/// `selection_edge_scroll_lines`).
+pub fn edge_scroll_rows(distance: u16) -> usize {
+    usize::from(distance).saturating_mul(3).clamp(3, 15)
+}
+
+/// Graphemes a word is made of for a double-click: anything but spaces and
+/// brackets, quotes and separators, so `zhuge@2lab.ai` or `src/ui.rs:42`
+/// select whole.
+fn is_word(g: &str) -> bool {
+    !g.chars().any(|c| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '"' | '\'' | '`' | ',' | ';' | '|'
+            )
+    })
+}
+
+/// The graphemes drawn on row `y` of `buf`: `(x, cells, symbol)`, a wide
+/// glyph once with its full width (the way a terminal backend walks cells).
+fn row_cells(buf: &Buffer, y: u16) -> Vec<(u16, u16, String)> {
+    let area = buf.area;
+    let mut out = Vec::new();
+    let mut x = area.x;
+    while x < area.right() {
+        let cell = &buf[(x, y)];
+        let w = cell.cell_width().max(1);
+        let sym = if cell.diff_option == CellDiffOption::Skip {
+            " ".to_string()
+        } else {
+            cell.symbol().to_string()
+        };
+        out.push((x, w, sym));
+        x = x.saturating_add(w);
+    }
+    out
+}
 
 /// One line that wraps at the width it is given (ratatui's word wrap,
 /// leading spaces kept). Its height is ratatui's own row count for that
@@ -147,6 +360,10 @@ pub struct Pager {
     hints: bool,
     glyphs: PagerGlyphs,
     theme: Theme,
+    selection: Option<Selection>,
+    selection_style: Style,
+    /// The content area and offset of the last paint, for the mouse.
+    last_view: Cell<Option<(Rect, usize)>>,
 }
 
 impl fmt::Debug for Pager {
@@ -194,6 +411,9 @@ impl Pager {
             hints: true,
             glyphs: PagerGlyphs::default(),
             theme: Theme::default(),
+            selection: None,
+            selection_style: Style::new().add_modifier(Modifier::REVERSED),
+            last_view: Cell::new(None),
         }
     }
 
@@ -222,6 +442,199 @@ impl Pager {
 
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+    }
+
+    /// How selected cells are drawn: patched over their own style. Default
+    /// `REVERSED` (no colour, so it shows in mono too).
+    pub fn selection_style(mut self, style: Style) -> Self {
+        self.selection_style = style;
+        self
+    }
+
+    /// The current selection, if any.
+    pub fn selection(&self) -> Option<&Selection> {
+        self.selection.as_ref()
+    }
+
+    /// Replace the selection (select all, a search hit) or clear it.
+    pub fn set_selection(&mut self, selection: Option<Selection>) {
+        self.selection = selection;
+    }
+
+    /// Forget the selection; returns whether one was shown.
+    pub fn clear_selection(&mut self) -> bool {
+        self.selection.take().is_some_and(|s| s.is_visible())
+    }
+
+    /// The content cell under screen cell `(col, row)` in the last paint,
+    /// clamped into the content area, and whether it was inside.
+    fn content_cell(&self, col: u16, row: u16) -> Option<((usize, u16), bool)> {
+        let (view, offset) = self.last_view.get()?;
+        if view.is_empty() {
+            return None;
+        }
+        let inside = view.contains(Position::new(col, row));
+        let c = col.clamp(view.x, view.right() - 1) - view.x;
+        let r = row.clamp(view.y, view.bottom() - 1) - view.y;
+        Some(((offset + r as usize, c), inside))
+    }
+
+    /// Mouse button down at screen cell `(col, row)`. On the content it
+    /// anchors a new selection (nothing highlighted until the pointer
+    /// moves); anywhere else it clears the old one. Returns whether to
+    /// redraw.
+    pub fn mouse_down(&mut self, col: u16, row: u16) -> bool {
+        match self.content_cell(col, row) {
+            Some(((r, c), true)) => {
+                let was = self.clear_selection();
+                self.selection = Some(Selection::anchor(r, c));
+                was
+            }
+            _ => self.clear_selection(),
+        }
+    }
+
+    /// The pointer moved with the button down. Past the content's top or
+    /// bottom edge the pager scrolls ([`edge_scroll_rows`]) and the
+    /// selection follows; repeat the last drag on a timer to keep scrolling
+    /// while the pointer rests there. Returns whether to redraw.
+    pub fn mouse_drag(&mut self, col: u16, row: u16) -> bool {
+        let Some((view, offset)) = self.last_view.get() else {
+            return false;
+        };
+        if view.is_empty()
+            || !self
+                .selection
+                .is_some_and(|s| s.phase != SelectionPhase::Done)
+        {
+            return false;
+        }
+        let max = self.last_max.get().unwrap_or(0);
+        let next = if row < view.y {
+            offset.saturating_sub(edge_scroll_rows(view.y - row))
+        } else if row >= view.bottom() {
+            offset
+                .saturating_add(edge_scroll_rows(row - view.bottom() + 1))
+                .min(max)
+        } else {
+            offset
+        };
+        if next != offset {
+            self.scroll = next;
+            self.last_view.set(Some((view, next)));
+        }
+        let Some(((r, c), inside)) = self.content_cell(col, row) else {
+            return false;
+        };
+        let Some(sel) = self.selection.as_mut() else {
+            return false;
+        };
+        let before = *sel;
+        sel.drag(r, c);
+        // Off the content the pointer clamps; it still counts as a drag.
+        if !inside && sel.phase == SelectionPhase::Anchored {
+            sel.phase = SelectionPhase::Dragging;
+        }
+        *sel != before || next != offset
+    }
+
+    /// Button released. Returns `true` when a selection was made — copy it
+    /// now ([`Pager::copy_sequence`]); a plain click leaves none.
+    pub fn mouse_up(&mut self, col: u16, row: u16) -> bool {
+        self.mouse_drag(col, row);
+        let made = self.selection.as_mut().is_some_and(Selection::finish);
+        if !made {
+            self.selection = None;
+        }
+        made
+    }
+
+    /// Double-click: select the word under screen cell `(col, row)` (no
+    /// spaces, brackets or quotes in it). Returns whether a word was
+    /// selected.
+    pub fn select_word(&mut self, col: u16, row: u16) -> bool {
+        let Some(((r, c), true)) = self.content_cell(col, row) else {
+            return false;
+        };
+        let Some(buf) = self.content_rows(r, r) else {
+            return false;
+        };
+        let cells = row_cells(&buf, 0);
+        let Some(at) = cells.iter().position(|(x, w, _)| c >= *x && c < x + w) else {
+            return false;
+        };
+        if !is_word(&cells[at].2) {
+            return false;
+        }
+        let first = (0..at)
+            .rev()
+            .take_while(|&i| is_word(&cells[i].2))
+            .last()
+            .unwrap_or(at);
+        let last = (at + 1..cells.len())
+            .take_while(|&i| is_word(&cells[i].2))
+            .last()
+            .unwrap_or(at);
+        let (x0, _, _) = cells[first];
+        let (x1, w1, _) = cells[last];
+        self.selection = Some(Selection::range((r, x0), (r, x1 + w1 - 1)));
+        true
+    }
+
+    /// Content rows `first..=last` drawn at the last paint's width.
+    fn content_rows(&self, first: usize, last: usize) -> Option<Buffer> {
+        let (view, _) = self.last_view.get()?;
+        let h = u16::try_from(last.checked_sub(first)? + 1).unwrap_or(u16::MAX);
+        let area = Rect::new(0, 0, view.width, h);
+        let mut buf = Buffer::empty(area);
+        self.render_content(area, &mut buf, first);
+        Some(buf)
+    }
+
+    /// The selected text, read from the cells as drawn at the last paint's
+    /// width: one line per row, trailing blanks trimmed, a wide glyph (CJK,
+    /// emoji, a flag) whole even when the selection starts or ends on its
+    /// second cell. `None` without a visible selection or a paint.
+    pub fn selected_text(&self) -> Option<String> {
+        let sel = self.selection.filter(|s| s.is_visible())?;
+        let (view, _) = self.last_view.get()?;
+        let ((sr, sc), (er, ec)) = sel.ordered();
+        let total = self.content_height(view.width);
+        if total == 0 || sr >= total {
+            return Some(String::new());
+        }
+        // Rows past the end (the `~` rows) hold no text.
+        let last = er.min(total - 1);
+        let buf = self.content_rows(sr, last)?;
+        let mut out: Vec<String> = Vec::with_capacity(last - sr + 1);
+        for r in sr..=last {
+            let c0 = if r == sr { sc } else { 0 };
+            let c1 = if r == er { ec } else { u16::MAX };
+            let line: String = row_cells(&buf, (r - sr) as u16)
+                .into_iter()
+                .filter(|(x, w, _)| *x <= c1 && x + w > c0)
+                .map(|(_, _, sym)| sym)
+                .collect();
+            out.push(line.trim_end().to_string());
+        }
+        Some(out.join("\n"))
+    }
+
+    /// The OSC 52 escape that puts the selected text on the clipboard of
+    /// the person's terminal ([`crate::osc52::sequence`]); write it to the
+    /// terminal after `mouse_up` returns `true`.
+    pub fn copy_sequence(&self, mux: osc52::Mux) -> Option<String> {
+        self.selected_text()
+            .filter(|t| !t.is_empty())
+            .map(|t| osc52::sequence(&t, mux))
+    }
+
+    /// The selection's highlight rects in the last paint (at most three).
+    pub fn selection_rects(&self) -> [Rect; 3] {
+        match (self.selection, self.last_view.get()) {
+            (Some(sel), Some((view, offset))) => sel.rects(view, offset),
+            _ => [Rect::default(); 3],
+        }
     }
 
     /// Start scrolled down by `rows` (clamped at the next paint).
@@ -387,6 +800,139 @@ impl Pager {
     }
 }
 
+/// Glyphs for [`notes_with`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotesGlyphs {
+    /// Before each `- ` item.
+    pub bullet: &'static str,
+    /// Down the left of a fenced code block.
+    pub gutter: &'static str,
+}
+
+impl Default for NotesGlyphs {
+    /// `∙` (U+2219) and `▐` (U+2590): both East-Asian Narrow.
+    fn default() -> Self {
+        Self {
+            bullet: "∙",
+            gutter: "▐",
+        }
+    }
+}
+
+impl NotesGlyphs {
+    /// herdr's `•` and `▏`. Both are East-Asian *Ambiguous*: two cells on a
+    /// CJK terminal set to wide ambiguous glyphs. Opt in knowingly.
+    pub const fn herdr() -> Self {
+        Self {
+            bullet: "•",
+            gutter: "▏",
+        }
+    }
+}
+
+/// Release-notes markdown as lines for a [`Pager`] (or any paragraph):
+/// `#`–`###` headings upper-cased in bold accent, `- ` and `* ` bullets
+/// (indent kept), `` `code` `` in bold accent without the backticks (spaces
+/// made non-breaking when it holds `=`, so `key = "value"` wraps whole),
+/// fenced blocks verbatim behind a gutter, blank lines kept. Lines start one
+/// cell in, as herdr draws them.
+pub fn notes(md: &str, theme: &Theme) -> Vec<Line<'static>> {
+    notes_with(md, theme, NotesGlyphs::default())
+}
+
+/// [`notes`] with other glyphs.
+pub fn notes_with(md: &str, theme: &Theme, glyphs: NotesGlyphs) -> Vec<Line<'static>> {
+    let text = theme.text();
+    let code = theme.accent().add_modifier(Modifier::BOLD);
+    let mut out = Vec::new();
+    let mut fenced = false;
+    for raw in md.lines() {
+        let line = raw.trim_end();
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            let mut spans = vec![
+                Span::styled(glyphs.gutter, theme.accent()),
+                Span::styled(" ", text),
+            ];
+            if !line.is_empty() {
+                spans.push(Span::styled(line.to_string(), text));
+            }
+            out.push(Line::from(spans));
+            continue;
+        }
+        if line.is_empty() {
+            out.push(Line::default());
+            continue;
+        }
+        let body = line.trim_start();
+        let indent = line.len() - body.len();
+        let heading = body
+            .strip_prefix("### ")
+            .or_else(|| body.strip_prefix("## "))
+            .or_else(|| body.strip_prefix("# "));
+        if let Some(rest) = heading {
+            let rest = rest.trim();
+            out.push(if rest.is_empty() {
+                Line::default()
+            } else {
+                Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled(rest.to_uppercase(), code),
+                ])
+            });
+            continue;
+        }
+        let mut spans = vec![Span::raw(" ".repeat(1 + indent))];
+        let rest = match body.strip_prefix("- ").or_else(|| body.strip_prefix("* ")) {
+            Some(rest) => {
+                spans.push(Span::styled(glyphs.bullet, theme.accent()));
+                spans.push(Span::raw(" "));
+                rest
+            }
+            None => body,
+        };
+        spans.extend(inline_code(rest, text, code));
+        out.push(Line::from(spans));
+    }
+    out
+}
+
+/// `` `code` `` runs styled without their backticks; an unclosed backtick
+/// stays as written (herdr's `release_notes_inline_spans`).
+fn inline_code(s: &str, text: Style, code: Style) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut rest = s;
+    while let Some(start) = rest.find('`') {
+        let (before, after) = rest.split_at(start);
+        if !before.is_empty() {
+            spans.push(Span::styled(before.to_string(), text));
+        }
+        let after = &after[1..];
+        let Some(end) = after.find('`') else {
+            spans.push(Span::styled(format!("`{after}"), text));
+            return spans;
+        };
+        let snippet = &after[..end];
+        if !snippet.is_empty() {
+            // Keep `key = "value"` together when the line wraps.
+            let shown = if snippet.contains('=') {
+                snippet.replace(' ', "\u{a0}")
+            } else {
+                snippet.to_string()
+            };
+            spans.push(Span::styled(shown, code));
+        }
+        rest = &after[end + 1..];
+    }
+    if !rest.is_empty() {
+        spans.push(Span::styled(rest.to_string(), text));
+    }
+    spans
+}
+
 /// `scroll / max_scroll` as a percentage, or 100 when everything fits.
 fn percent(offset: usize, total: usize, view: usize) -> u8 {
     let max_scroll = total.saturating_sub(view);
@@ -429,6 +975,14 @@ impl Renderable for Pager {
         let offset = self.scroll.min(max);
         let drawn = self.render_content(content, buf, offset);
         self.render_eof(content, buf, drawn);
+        self.last_view.set(Some((content, offset)));
+        if let Some(sel) = self.selection {
+            for r in sel.rects(content, offset) {
+                if !r.is_empty() {
+                    buf.set_style(r, self.selection_style);
+                }
+            }
+        }
         y += content_h;
         if rule {
             self.render_bottom_bar(
@@ -643,5 +1197,343 @@ mod tests {
             assert!(matches!(c.bg, ratatui::style::Color::Reset), "{c:?}");
         }
         assert!(buf[(0, 2)].modifier.contains(Modifier::DIM), "~ is dim");
+    }
+
+    fn paint(p: &Pager, w: u16, h: u16) -> Buffer {
+        let area = Rect::new(0, 0, w, h);
+        let mut buf = Buffer::empty(area);
+        Renderable::render(p, area, &mut buf);
+        buf
+    }
+
+    fn numbered(n: usize) -> Pager {
+        let lines: Vec<Line<'static>> = (0..n)
+            .map(|i| Line::from(format!("line {i:02} {}", "x".repeat(20))))
+            .collect();
+        Pager::new("log", lines).hints(false)
+    }
+
+    fn make_sel(sr: usize, sc: u16, er: usize, ec: u16) -> Selection {
+        let mut s = Selection::anchor(sr, sc);
+        s.drag(er, ec);
+        s
+    }
+
+    // Upstream: selection.rs `ordering_forward`, `ordering_backward`.
+    #[test]
+    fn ordering_is_reading_order() {
+        assert_eq!(make_sel(2, 5, 4, 10).ordered(), ((2, 5), (4, 10)));
+        assert_eq!(make_sel(4, 10, 2, 5).ordered(), ((2, 5), (4, 10)));
+    }
+
+    // Upstream: `single_line_contains`, `multi_line_contains`.
+    #[test]
+    fn contains_single_and_multi_line() {
+        let sel = make_sel(2, 5, 2, 15);
+        assert!(!sel.contains(2, 4));
+        assert!(sel.contains(2, 5) && sel.contains(2, 10) && sel.contains(2, 15));
+        assert!(!sel.contains(2, 16) && !sel.contains(1, 10) && !sel.contains(3, 10));
+        let sel = make_sel(2, 5, 4, 10);
+        assert!(!sel.contains(2, 4));
+        assert!(sel.contains(2, 5) && sel.contains(2, 79));
+        assert!(sel.contains(3, 0) && sel.contains(3, 79));
+        assert!(sel.contains(4, 0) && sel.contains(4, 10));
+        assert!(!sel.contains(4, 11));
+    }
+
+    // Upstream: `anchored_not_visible`, `click_without_drag`, `drag_then_finish`.
+    #[test]
+    fn a_click_is_not_a_selection_until_the_pointer_moves() {
+        let mut sel = Selection::anchor(5, 10);
+        assert!(!sel.is_visible() && !sel.contains(5, 10));
+        assert!(sel.is_just_click());
+        assert!(!sel.finish());
+        let mut sel = Selection::anchor(5, 10);
+        sel.drag(7, 20);
+        assert_eq!(sel.phase(), SelectionPhase::Dragging);
+        assert!(sel.is_visible() && !sel.is_just_click());
+        assert!(sel.finish());
+        assert_eq!(sel.phase(), SelectionPhase::Done);
+    }
+
+    // Upstream: `visible_rects_match_selection_cells_when_scrolled_and_reversed`.
+    #[test]
+    fn rects_match_selected_cells_when_scrolled_and_reversed() {
+        let inner = Rect::new(10, 5, 8, 6);
+        for (start, end) in [
+            ((0, 2), (0, 5)),
+            ((1, 3), (4, 2)),
+            ((4, 2), (1, 3)),
+            ((0, 0), (20, 7)),
+            ((20, 0), (22, 7)),
+        ] {
+            let sel = Selection::range(start, end);
+            for top in [0, 2, 5, 20] {
+                let rects = sel.rects(inner, top);
+                for row in 0..inner.height {
+                    for col in 0..inner.width {
+                        let p = Position::new(inner.x + col, inner.y + row);
+                        assert_eq!(
+                            rects.iter().any(|r| r.contains(p)),
+                            sel.contains(top + row as usize, col),
+                            "start={start:?} end={end:?} top={top} row={row} col={col}"
+                        );
+                    }
+                    for r in rects.iter().filter(|r| !r.is_empty()) {
+                        assert_eq!(r.intersection(inner), *r, "inside the view");
+                    }
+                }
+            }
+        }
+    }
+
+    // Upstream: `drag_uses_buffer_rows_when_scrolled` and
+    // `contains_tracks_current_viewport_after_scroll`: content rows, so the
+    // selection stays on its text while the pager scrolls.
+    #[test]
+    fn a_selection_stays_on_its_rows_while_scrolling() {
+        let mut p = numbered(50).scroll_to(10);
+        paint(&p, 40, 11); // title, 9 content rows (y 1..10), rule
+        assert!(!p.mouse_down(10, 1));
+        assert_eq!(p.selection().map(|s| s.ordered().0), Some((10, 10)));
+        p.key(Key::Down.into());
+        p.key(Key::Down.into());
+        paint(&p, 40, 11);
+        assert!(p.mouse_drag(4, 2));
+        assert_eq!(
+            p.selection().map(|s| s.ordered()),
+            Some(((10, 10), (13, 4)))
+        );
+        assert!(p.mouse_up(4, 2));
+        let text = p.selected_text().expect("text");
+        assert_eq!(text.lines().count(), 4);
+        assert!(text.starts_with("xxxxx"), "{text}");
+        // Scroll on: the highlight moves up with its rows (row 13 now at the
+        // top), the text holds.
+        p.key(Key::Down.into());
+        let buf = paint(&p, 40, 11);
+        assert_eq!(
+            p.selection_rects(),
+            [Rect::default(), Rect::default(), Rect::new(0, 1, 5, 1)]
+        );
+        assert!(buf[(4, 1)].modifier.contains(Modifier::REVERSED));
+        assert!(!buf[(5, 1)].modifier.contains(Modifier::REVERSED));
+        assert_eq!(p.selected_text().as_deref(), Some(text.as_str()));
+    }
+
+    // Upstream: `clamp_to_pane_bounds`; plus herdr's edge autoscroll.
+    #[test]
+    fn dragging_past_the_edges_clamps_and_scrolls() {
+        assert_eq!(
+            [
+                edge_scroll_rows(0),
+                edge_scroll_rows(1),
+                edge_scroll_rows(2),
+                edge_scroll_rows(9)
+            ],
+            [3, 3, 6, 15]
+        );
+        let mut p = numbered(50);
+        paint(&p, 40, 11);
+        p.mouse_down(5, 3);
+        assert!(p.mouse_drag(200, 10), "one row below the content");
+        assert_eq!(p.scroll_offset(), 3);
+        assert_eq!(p.selection().map(|s| s.ordered().1), Some((3 + 8, 39)));
+        paint(&p, 40, 11);
+        assert!(p.mouse_drag(0, 0), "above the content");
+        assert_eq!(p.scroll_offset(), 0);
+        assert_eq!(p.selection().map(|s| s.ordered().0), Some((0, 0)));
+        // A click off the content clears the selection; a click is not one.
+        assert!(p.mouse_up(0, 0));
+        assert!(p.mouse_down(0, 10), "the rule row clears it");
+        assert!(p.selection().is_none());
+        p.mouse_down(3, 2);
+        assert!(!p.mouse_up(3, 2));
+        assert!(p.selection().is_none());
+        // Before any paint the mouse does nothing.
+        let mut fresh = numbered(3);
+        assert!(!fresh.mouse_down(1, 1) && !fresh.mouse_drag(2, 2) && !fresh.mouse_up(2, 2));
+    }
+
+    /// herdr H5: truncation split graphemes. Selection reads whole graphemes
+    /// by cell: a wide glyph is taken whole from either of its cells.
+    #[test]
+    fn selected_text_is_read_by_cells_with_wide_glyphs_whole() {
+        let mut p = Pager::new(
+            "t",
+            vec![
+                Line::from("한국어 text   "),
+                Line::from("🇰🇷 team · 👍🏽ok · 👩\u{200d}💻👩\u{200d}💻"),
+                Line::from("e\u{301}tude"),
+            ],
+        )
+        .hints(false);
+        paint(&p, 40, 6);
+        // From the second cell of 한 to the first cell of 국.
+        p.set_selection(Some(Selection::range((0, 1), (0, 2))));
+        assert_eq!(p.selected_text().as_deref(), Some("한국"));
+        // Trailing blanks trimmed.
+        p.set_selection(Some(Selection::range((0, 7), (0, 30))));
+        assert_eq!(p.selected_text().as_deref(), Some("text"));
+        p.set_selection(Some(Selection::range((1, 0), (1, 0))));
+        assert_eq!(p.selected_text().as_deref(), Some("🇰🇷"));
+        p.set_selection(Some(Selection::range((1, 1), (2, 0))));
+        assert_eq!(
+            p.selected_text().as_deref(),
+            Some("🇰🇷 team · 👍🏽ok · 👩\u{200d}💻👩\u{200d}💻\ne\u{301}")
+        );
+        // Rows past the end hold nothing.
+        p.set_selection(Some(Selection::range((2, 0), (9, 5))));
+        assert_eq!(p.selected_text().as_deref(), Some("e\u{301}tude"));
+        assert_eq!(
+            p.copy_sequence(osc52::Mux::None),
+            Some(osc52::sequence("e\u{301}tude", osc52::Mux::None))
+        );
+    }
+
+    #[test]
+    fn double_click_selects_a_word() {
+        let mut p = Pager::new(
+            "t",
+            vec![Line::from(
+                "dev1@2lab.ai failed (http://localhost:3456/llmux/refresh): refused",
+            )],
+        )
+        .hints(false);
+        paint(&p, 80, 4);
+        assert!(p.select_word(4, 1));
+        assert_eq!(p.selected_text().as_deref(), Some("dev1@2lab.ai"));
+        assert_eq!(p.selection().map(|s| s.phase()), Some(SelectionPhase::Done));
+        assert!(p.select_word(30, 1));
+        assert_eq!(
+            p.selected_text().as_deref(),
+            Some("http://localhost:3456/llmux/refresh")
+        );
+        assert!(!p.select_word(12, 1), "a space");
+        assert!(!p.select_word(5, 3), "off the content");
+    }
+
+    #[test]
+    fn the_highlight_is_a_builder_style_and_mono_has_no_colour() {
+        let mut p = numbered(5).theme(Theme::mono());
+        paint(&p, 40, 8);
+        p.set_selection(Some(Selection::range((1, 2), (2, 3))));
+        let buf = paint(&p, 40, 8);
+        for c in buf.content() {
+            assert!(matches!(c.fg, ratatui::style::Color::Reset), "{c:?}");
+            assert!(matches!(c.bg, ratatui::style::Color::Reset), "{c:?}");
+        }
+        assert!(buf[(2, 2)].modifier.contains(Modifier::REVERSED));
+        assert!(
+            buf[(39, 2)].modifier.contains(Modifier::REVERSED),
+            "to the row end"
+        );
+        assert!(buf[(3, 3)].modifier.contains(Modifier::REVERSED));
+        assert!(!buf[(4, 3)].modifier.contains(Modifier::REVERSED));
+        let mut p = p.selection_style(Style::new().add_modifier(Modifier::UNDERLINED));
+        p.set_selection(Some(Selection::range((1, 2), (1, 3))));
+        let buf = paint(&p, 40, 8);
+        assert!(buf[(2, 2)].modifier.contains(Modifier::UNDERLINED));
+        assert!(!buf[(2, 2)].modifier.contains(Modifier::REVERSED));
+        assert!(p.clear_selection());
+        assert_eq!(p.selection_rects(), [Rect::default(); 3]);
+        // Tiny areas: no panic, rects inside.
+        p.set_selection(Some(Selection::range((0, 0), (4, 39))));
+        for (w, h) in [(1, 1), (2, 2), (5, 3), (12, 2)] {
+            paint(&p, w, h);
+            for r in p.selection_rects() {
+                assert!(r.right() <= w && r.bottom() <= h, "{w}x{h} {r:?}");
+            }
+        }
+    }
+
+    fn line_text(l: &Line) -> String {
+        l.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    // Upstream: release_notes.rs `release_notes_inline_code_spans_are_styled_without_backticks`.
+    #[test]
+    fn notes_inline_code_is_styled_without_backticks() {
+        let t = Theme::ansi();
+        let lines = notes("- `herdr pane run ...` now works", &t);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(line_text(&lines[0]), " ∙ herdr pane run ... now works");
+        let code = &lines[0].spans[3];
+        assert_eq!(code.content.as_ref(), "herdr pane run ...");
+        assert_eq!(code.style, t.accent().add_modifier(Modifier::BOLD));
+    }
+
+    // Upstream: `release_notes_config_inline_code_uses_nonbreaking_spaces`.
+    #[test]
+    fn notes_config_code_uses_non_breaking_spaces() {
+        let lines = notes("- After: `new_tab = \"prefix+c\"`", &Theme::ansi());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines[0].spans[4].content.as_ref(),
+            "new_tab\u{a0}=\u{a0}\"prefix+c\""
+        );
+        assert_eq!(
+            line_text(&lines[0]).replace('\u{a0}', " "),
+            " ∙ After: new_tab = \"prefix+c\""
+        );
+    }
+
+    // Upstream: `release_notes_fenced_code_blocks_render_as_preformatted_lines`
+    // and `release_notes_fenced_code_blocks_preserve_blank_lines`.
+    #[test]
+    fn notes_fenced_blocks_are_verbatim_behind_a_gutter() {
+        let t = Theme::ansi();
+        let lines = notes(
+            "### Fixed\n```bash\njust check\n- not a bullet\n```\n- after",
+            &t,
+        );
+        let text: Vec<String> = lines.iter().map(line_text).collect();
+        assert_eq!(
+            text,
+            [" FIXED", "▐ just check", "▐ - not a bullet", " ∙ after"]
+        );
+        assert_eq!(lines[1].spans[0].style, t.accent());
+        let lines = notes("```\nfirst\n\nsecond\n```", &t);
+        let text: Vec<String> = lines.iter().map(line_text).collect();
+        assert_eq!(text, ["▐ first", "▐ ", "▐ second"]);
+    }
+
+    #[test]
+    fn notes_headings_bullets_and_glyphs() {
+        let t = Theme::mono();
+        let md = "## Added\n\nPlain `text`.\n  - nested\n* star\n# 한국어 제목\nan `unclosed tick";
+        let text: Vec<String> = notes(md, &t).iter().map(line_text).collect();
+        assert_eq!(
+            text,
+            [
+                " ADDED",
+                "",
+                " Plain text.",
+                "   ∙ nested",
+                " ∙ star",
+                " 한국어 제목",
+                " an `unclosed tick"
+            ]
+        );
+        // Mono: headings and code bold, nothing coloured.
+        for l in notes(md, &t) {
+            for sp in &l.spans {
+                assert_eq!((sp.style.fg, sp.style.bg), (None, None), "{sp:?}");
+            }
+        }
+        assert!(
+            notes(md, &t)[0].spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        let herdr: Vec<String> = notes_with("- a\n```\nb\n```", &t, NotesGlyphs::herdr())
+            .iter()
+            .map(line_text)
+            .collect();
+        assert_eq!(herdr, [" • a", "▏ b"]);
+        for g in [NotesGlyphs::default().bullet, NotesGlyphs::default().gutter] {
+            assert_eq!(unicode_width::UnicodeWidthStr::width_cjk(g), 1, "{g}");
+        }
     }
 }

@@ -3,10 +3,12 @@ use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
-use super::{Outcome, Pager};
+use super::{Outcome, Pager, Selection, notes};
 use crate::catalog::{ComponentDoc, Demo, DemoCx, DemoDoc, Group, PropDoc, Source};
-use crate::input::KeyInput;
+use crate::input::{Key, KeyInput};
+use crate::osc52;
 use crate::render::{FlexRenderable, Renderable, RenderableItem};
+use crate::text;
 use crate::theme::Theme;
 
 const USAGE: &str = r#"use twolab_tui::pager::{Outcome, Pager};
@@ -18,7 +20,21 @@ match pager.key(key) {
     Outcome::Scrolled => redraw(),
     Outcome::Ignored => {}
 }
-frame.render_widget(&pager, frame.area());"#;
+frame.render_widget(&pager, frame.area());
+
+// Mouse: drag to select (it stays on its rows while scrolling), copy on release.
+match mouse.kind {
+    Down(Left) => { pager.mouse_down(mouse.column, mouse.row); }
+    Drag(Left) => { pager.mouse_drag(mouse.column, mouse.row); }
+    Up(Left) if pager.mouse_up(mouse.column, mouse.row) => {
+        if let Some(seq) = pager.copy_sequence(osc52::Mux::detect(tmux, screen)) {
+            stdout.write_all(seq.as_bytes())?;
+        }
+    }
+    _ => {}
+}
+// Release notes as pager lines.
+let pager = Pager::new("v0.5.0", twolab_tui::pager::notes(changelog, &theme));"#;
 
 #[derive(Clone, Copy)]
 enum Kind {
@@ -327,12 +343,177 @@ fn code() -> Box<dyn Demo> {
     PagerDemo::boxed("src/rotation.rs", code_lines)
 }
 
+const REFRESH_LOG: [&str; 9] = [
+    "refresh 5 accounts at 14:02:11",
+    "  zhuge@2lab.ai     ok      7d 41%",
+    "  ai3@iq.io         ok      7d 63%",
+    "  dev1@2lab.ai      failed  error sending request for url (http://localhost:3456/llmux/refresh): connection refused",
+    "  simayi@2lab.ai    ok      7d 12%",
+    "  ai2@iq.io         failed  401 Unauthorized: refresh token revoked; run `llmux login ai2@iq.io`",
+    "",
+    "메모: 서울 리전 키는 주말에 교체 (담당 zhuge@2lab.ai)",
+    "4 of 5 accounts usable · next refresh 14:07:11",
+];
+
+/// Selecting with a stand-in pointer: the catalog's frames take keys, so
+/// arrows move the pointer and Enter presses and releases the button.
+struct Select {
+    pager: Pager,
+    theme: Option<Theme>,
+    pointer: (u16, u16),
+    pressed: bool,
+    said: String,
+}
+
+impl Demo for Select {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &DemoCx) {
+        if self.theme != Some(cx.theme) {
+            let t = cx.theme;
+            let lines = REFRESH_LOG
+                .iter()
+                .map(|l| {
+                    let style = if l.contains("failed") {
+                        t.text()
+                    } else {
+                        t.secondary()
+                    };
+                    Line::styled(*l, style)
+                })
+                .collect();
+            self.pager.set_lines(lines);
+            self.pager.set_theme(t);
+            self.theme = Some(t);
+        }
+        let t = &cx.theme;
+        let body = Rect {
+            height: area.height.saturating_sub(1),
+            ..area
+        };
+        Renderable::render(&self.pager, body, buf);
+        // The pointer: underlined and bold (the selection is reversed).
+        let (x, y) = (area.x + self.pointer.0, area.y + self.pointer.1);
+        if x < body.right() && y < body.bottom() {
+            let c = &mut buf[(x, y)];
+            c.modifier.insert(Modifier::UNDERLINED | Modifier::BOLD);
+        }
+        if area.height > 1 {
+            let line = Line::from(Span::styled(format!(" {}", self.said), t.dim()));
+            let row = Rect::new(area.x, area.bottom() - 1, area.width, 1);
+            Renderable::render(&text::truncate_line(line, area.width as usize), row, buf);
+        }
+    }
+
+    fn key(&mut self, key: KeyInput) -> bool {
+        let (x, y) = self.pointer;
+        self.pointer = match key.key {
+            Key::Left => (x.saturating_sub(1), y),
+            Key::Right => (x.saturating_add(1).min(139), y),
+            Key::Up => (x, y.saturating_sub(1)),
+            Key::Down => (x, y.saturating_add(1).min(39)),
+            _ => (x, y),
+        };
+        let (x, y) = self.pointer;
+        match key.key {
+            Key::Left | Key::Right | Key::Up | Key::Down => {
+                if self.pressed {
+                    self.pager.mouse_drag(x, y);
+                }
+                true
+            }
+            Key::Enter if !self.pressed => {
+                self.pressed = true;
+                self.pager.mouse_down(x, y);
+                self.said = "pressed · arrows drag · Enter releases".into();
+                true
+            }
+            Key::Enter => {
+                self.pressed = false;
+                self.said = if self.pager.mouse_up(x, y) {
+                    self.copied()
+                } else {
+                    "a click, not a selection".into()
+                };
+                true
+            }
+            Key::Tab => {
+                self.said = if self.pager.select_word(x, y) {
+                    self.copied()
+                } else {
+                    "no word under the pointer".into()
+                };
+                true
+            }
+            Key::Esc => {
+                self.pressed = false;
+                self.said = "cleared".into();
+                self.pager.clear_selection()
+            }
+            Key::PageUp | Key::PageDown | Key::Home | Key::End => {
+                self.pager.key(key) == Outcome::Scrolled
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Select {
+    fn copied(&self) -> String {
+        let text = self.pager.selected_text().unwrap_or_default();
+        let bytes = self
+            .pager
+            .copy_sequence(osc52::Mux::None)
+            .map_or(0, |s| s.len());
+        let first = text.lines().next().unwrap_or("");
+        format!(
+            "copied {} chars, {} lines (OSC 52, {bytes} bytes): {first}",
+            text.chars().count(),
+            text.lines().count()
+        )
+    }
+}
+
+fn select() -> Box<dyn Demo> {
+    let mut pager = Pager::new("llmux · refresh log", Vec::new()).hints(false);
+    // The dev1 error, picked before any key: rows 3–4 of the content.
+    pager.set_selection(Some(Selection::range((3, 28), (4, 40))));
+    Box::new(Select {
+        pager,
+        theme: None,
+        pointer: (30, 4),
+        pressed: false,
+        said: "arrows move the pointer · Enter press/release · Tab word · PgUp/PgDn scroll".into(),
+    })
+}
+
+const CHANGELOG: &str = "### Added
+- `tabs`: clickable < > scroll buttons and a `+` action, opt-in
+- `select_list`: tree rows with folding groups; meta columns by width
+- `pager`: drag to select, copied with OSC 52
+
+### Changed
+- the menu takes the taller side of a short screen instead of covering the row you clicked
+- config: `new_tab = \"prefix+c\"` replaces `tab.new`
+
+### Fixed
+- 한국어 탭 이름의 클릭 영역이 셀 폭으로 맞춰졌습니다
+- notes:
+
+```bash
+cargo install twolab-tui-catalog
+tui-catalog --theme mono
+```
+";
+
+fn notes_lines(t: &Theme) -> Vec<Line<'static>> {
+    notes(CHANGELOG, t)
+}
+
 pub(crate) const DOC: ComponentDoc = ComponentDoc {
     slug: "pager",
     name: "Pager",
     ty: "twolab_tui::pager::Pager",
     summary: "The whole text, and where you are in it.",
-    description: "Codex's pager overlay: a title rule, the content with long lines wrapped (nothing cut), ~ on rows past the end, and a bottom rule that says how far down you are as a percentage. Line heights are measured exactly once per width and cached, so a long transcript scrolls without re-wrapping every frame; any stack of Renderables can be paged too.",
+    description: "Codex's pager overlay: a title rule, the content with long lines wrapped (nothing cut), ~ on rows past the end, and a bottom rule that says how far down you are as a percentage. Line heights are measured exactly once per width and cached, so a long transcript scrolls without re-wrapping every frame; any stack of Renderables can be paged too. From herdr: a mouse drag selects text that stays on its rows while the pager scrolls (at most three highlight rects, read back by cells with wide glyphs whole, copied through OSC 52), a double-click selects a word, and notes() turns release-notes markdown into styled lines.",
     used_in: "Codex shows static text, diffs and approvals in it. llmux's raw request/response viewer, input excerpt and logs overlay are the planned hosts.",
     source: Source {
         project: "codex",
@@ -385,6 +566,36 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
             description: "Ignored, Scrolled or Closed.",
         },
         PropDoc {
+            name: ".mouse_down / .mouse_drag / .mouse_up(col, row)",
+            ty: "bool",
+            default: None,
+            description: "A drag selection: Anchored on press (nothing drawn), Dragging once the pointer moves, Done on release (mouse_up returns true: copy now). Past the top or bottom edge the pager scrolls 3–15 rows; rows are content rows, so the selection stays on its text while scrolling.",
+        },
+        PropDoc {
+            name: ".select_word(col, row)",
+            ty: "bool",
+            default: None,
+            description: "Double-click: the word under the cell (no spaces, brackets or quotes, so emails and paths select whole).",
+        },
+        PropDoc {
+            name: ".selected_text() / .copy_sequence(mux)",
+            ty: "Option<String>",
+            default: None,
+            description: "The selection read from the drawn cells, one line per row, a wide glyph whole; the OSC 52 escape for it (crate::osc52).",
+        },
+        PropDoc {
+            name: ".selection_style(style) / .set_selection(sel) / .selection_rects()",
+            ty: "Style / Option<Selection> / [Rect; 3]",
+            default: Some("REVERSED"),
+            description: "How selected cells are drawn; set or clear a Selection::range((row, col), (row, col)); the highlight rects of the last paint.",
+        },
+        PropDoc {
+            name: "pager::notes(md, &theme)",
+            ty: "Vec<Line<'static>>",
+            default: None,
+            description: "Release-notes markdown: ### headings upper-cased in bold accent, - bullets, `code` without backticks (non-breaking around =), fenced blocks behind a ▐ gutter. notes_with(.., NotesGlyphs::herdr()) for • and ▏.",
+        },
+        PropDoc {
             name: "WrappedLine(line)",
             ty: "Renderable",
             default: None,
@@ -405,6 +616,7 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
         "Position is said in words (42%), not only by a scrollbar.",
         "Rows past the end show ~ so a short document never looks cut off; long lines wrap instead of being clipped.",
         "Default rule glyphs (/ ╌ ~) are East-Asian Narrow; the title is bold and the rules dim, so mono keeps the structure.",
+        "The selection is reversed by default, so it shows without colour; the copied text keeps every grapheme whole (flags, skin tones, ZWJ sequences, CJK).",
     ],
     usage: USAGE,
     demos: &[
@@ -437,6 +649,26 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
             animated: false,
             interactive: true,
             make: code,
+        },
+        DemoDoc {
+            id: "select",
+            title: "Select and copy",
+            description: "llmux's refresh log with an error picked. Arrows move a stand-in pointer, Enter presses and releases (a drag between), Tab selects the word under it, PgUp/PgDn scroll: the selection stays on its rows. The last line says what OSC 52 would copy.",
+            cols: 72,
+            rows: 12,
+            animated: false,
+            interactive: true,
+            make: select,
+        },
+        DemoDoc {
+            id: "notes",
+            title: "Release notes",
+            description: "A changelog through pager::notes: upper-case headings, bullets, inline code, a fenced block behind a gutter, Korean text wrapped by cells.",
+            cols: 64,
+            rows: 18,
+            animated: false,
+            interactive: true,
+            make: || PagerDemo::boxed("v0.5.0 · what's new", notes_lines),
         },
     ],
 };
