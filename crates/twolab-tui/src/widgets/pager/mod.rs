@@ -19,7 +19,7 @@
 // ee5bfb5041bb3e4a49d591c72308aae3c81ecdde (Apache-2.0). Modified by 2lab:
 // rows are content rows of the pager (herdr: scrollback rows of a terminal
 // pane); the selected text is read from the drawn cells grapheme by grapheme,
-// a wide glyph whole; double-click selects a word locally (herdr asks its
+// a wide glyph whole, and highlighted the same way; double-click selects a word locally (herdr asks its
 // server); edge autoscroll happens per drag event, the host repeating the
 // last drag on its own timer (no clock here); the highlight style is a
 // builder option (REVERSED by default) instead of a colour mixed from the
@@ -194,27 +194,33 @@ impl Selection {
             return out;
         }
         let ((sr, sc), (er, ec)) = self.ordered();
-        let bottom = top + view.height as usize;
-        let rect = |first: usize, end: usize, left: u16, right: u16| {
-            let (first, end) = (first.max(top), end.min(bottom));
+        // The content rows on screen, `top..=bottom`: rows are clipped to
+        // these before any row maths, and ranges are inclusive, so a
+        // selection out to `usize::MAX` overflows nothing.
+        let bottom = top.saturating_add(usize::from(view.height) - 1);
+        let rect = |first: usize, last: usize, left: u16, right: u16| {
+            let (first, last) = (first.max(top), last.min(bottom));
             let (left, right) = (left.min(view.width), right.min(view.width));
-            if first >= end || left >= right {
+            if first > last || left >= right {
                 Rect::default()
             } else {
                 Rect::new(
                     view.x + left,
                     view.y + (first - top) as u16,
                     right - left,
-                    (end - first) as u16,
+                    (last - first + 1) as u16,
                 )
             }
         };
         if sr == er {
-            out[0] = rect(sr, sr + 1, sc, ec.saturating_add(1));
+            out[0] = rect(sr, sr, sc, ec.saturating_add(1));
         } else {
-            out[0] = rect(sr, sr + 1, sc, view.width);
-            out[1] = rect(sr + 1, er, 0, view.width);
-            out[2] = rect(er, er + 1, 0, ec.saturating_add(1));
+            out[0] = rect(sr, sr, sc, view.width);
+            // sr < er, so neither bound overflows.
+            if er - sr > 1 {
+                out[1] = rect(sr + 1, er - 1, 0, view.width);
+            }
+            out[2] = rect(er, er, 0, ec.saturating_add(1));
         }
         out
     }
@@ -263,6 +269,31 @@ fn row_cells(buf: &Buffer, y: u16) -> Vec<(u16, u16, &str)> {
         x = x.saturating_add(w);
     }
     out
+}
+
+/// A one-row highlight rect inside `view` widened to whole graphemes, as
+/// [`Pager::selected_text`] reads them: when it starts or ends inside a wide
+/// glyph, the glyph's cells all join. A terminal draws a wide glyph in its
+/// first cell's style, so a style on the second cell alone never shows.
+/// Taller rects span the whole row already.
+fn whole_graphemes(buf: &Buffer, view: Rect, r: Rect) -> Rect {
+    if r.is_empty() || r.height != 1 {
+        return r;
+    }
+    let (mut left, mut right) = (r.x, r.right());
+    let mut x = view.x;
+    while x < view.right() && x < right {
+        let w = buf[(x, r.y)].cell_width().max(1);
+        let end = x.saturating_add(w).min(view.right());
+        if x < left && left < end {
+            left = x;
+        }
+        if x < right && right < end {
+            right = end;
+        }
+        x = end;
+    }
+    Rect::new(left, r.y, right - left, 1)
 }
 
 /// One line that wraps at the width it is given (ratatui's word wrap,
@@ -663,7 +694,9 @@ impl Pager {
             .map(|t| osc52::sequence(&t, mux))
     }
 
-    /// The selection's highlight rects in the last paint (at most three).
+    /// The selection's highlight rects in the last paint (at most three),
+    /// in cells; the paint widens a rect that starts or ends inside a wide
+    /// glyph to the whole glyph.
     pub fn selection_rects(&self) -> [Rect; 3] {
         match (self.selection, self.last_view.get()) {
             (Some(sel), Some((view, offset))) => sel.rects(view, offset),
@@ -1025,6 +1058,7 @@ impl Renderable for Pager {
         self.last_view.set(Some((content, offset)));
         if let Some(sel) = self.selection {
             for r in sel.rects(content, offset) {
+                let r = whole_graphemes(buf, content, r);
                 if !r.is_empty() {
                     buf.set_style(r, self.selection_style);
                 }
@@ -1484,6 +1518,89 @@ mod tests {
         assert_eq!(text.lines().count(), n);
         assert_eq!(text.lines().nth(123_456), Some("row 123456"));
         assert!(text.ends_with("row 199999"));
+    }
+
+    /// Review #6: a selection ending at `(usize::MAX, u16::MAX)` overflowed
+    /// `er + 1` in the paint; rows at the far end overflowed `top + height`
+    /// and `sr + 1`.
+    #[test]
+    fn selections_out_to_usize_max_paint_without_overflow() {
+        let mut p = numbered(5);
+        paint(&p, 40, 8);
+        p.set_selection(Some(Selection::range((0, 0), (usize::MAX, u16::MAX))));
+        let buf = paint(&p, 40, 8);
+        for y in 1..7 {
+            for x in 0..40 {
+                assert!(buf[(x, y)].modifier.contains(Modifier::REVERSED), "{x},{y}");
+            }
+        }
+        assert_eq!(
+            p.selection_rects(),
+            [
+                Rect::new(0, 1, 40, 1),
+                Rect::new(0, 2, 40, 5),
+                Rect::default()
+            ]
+        );
+        let view = Rect::new(2, 3, 10, 5);
+        let far = Selection::range((usize::MAX, 0), (usize::MAX, 3));
+        assert_eq!(
+            far.rects(view, usize::MAX - 2),
+            [Rect::new(2, 5, 4, 1), Rect::default(), Rect::default()]
+        );
+        let tail = Selection::range((usize::MAX - 1, 4), (usize::MAX, u16::MAX));
+        assert_eq!(
+            tail.rects(view, usize::MAX - 4),
+            [
+                Rect::new(6, 6, 6, 1),
+                Rect::default(),
+                Rect::new(2, 7, 10, 1)
+            ]
+        );
+        assert_eq!(
+            tail.rects(view, usize::MAX),
+            [Rect::default(), Rect::default(), Rect::new(2, 3, 10, 1)]
+        );
+    }
+
+    /// Review #5: selecting only the second cell of a wide glyph copies it
+    /// whole, so the highlight takes it whole too (a terminal draws a wide
+    /// glyph in its first cell's style; a style on the second alone never
+    /// reaches the screen).
+    #[test]
+    fn the_highlight_takes_wide_glyphs_whole() {
+        let mut p = Pager::new("t", vec![Line::from("한글 ab")]).hints(false);
+        let plain = paint(&p, 10, 4);
+        p.set_selection(Some(Selection::range((0, 1), (0, 1))));
+        assert_eq!(p.selected_text().as_deref(), Some("한"));
+        let buf = paint(&p, 10, 4);
+        assert!(
+            buf[(0, 1)].modifier.contains(Modifier::REVERSED),
+            "lead cell"
+        );
+        assert!(
+            !plain.diff(&buf).is_empty(),
+            "the change reaches the screen"
+        );
+        assert!(!buf[(2, 1)].modifier.contains(Modifier::REVERSED));
+        // Ending on the first cell of 글 takes its second cell too; the
+        // ASCII after it is untouched.
+        p.set_selection(Some(Selection::range((0, 1), (0, 2))));
+        let buf = paint(&p, 10, 4);
+        for x in 0..4 {
+            assert!(buf[(x, 1)].modifier.contains(Modifier::REVERSED), "{x}");
+        }
+        assert!(!buf[(4, 1)].modifier.contains(Modifier::REVERSED));
+        // Across rows: the first row starts and the last row ends whole.
+        let mut p = Pager::new("t", vec![Line::from("a한"), Line::from("글b")]).hints(false);
+        paint(&p, 10, 5);
+        p.set_selection(Some(Selection::range((0, 2), (1, 0))));
+        assert_eq!(p.selected_text().as_deref(), Some("한\n글"));
+        let buf = paint(&p, 10, 5);
+        assert!(!buf[(0, 1)].modifier.contains(Modifier::REVERSED));
+        assert!(buf[(1, 1)].modifier.contains(Modifier::REVERSED));
+        assert!(buf[(1, 2)].modifier.contains(Modifier::REVERSED));
+        assert!(!buf[(2, 2)].modifier.contains(Modifier::REVERSED));
     }
 
     #[test]
