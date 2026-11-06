@@ -20,6 +20,7 @@ pub mod multi_select;
 pub mod packed_grid;
 pub mod pager;
 pub mod rule;
+pub mod scrollbar;
 pub mod select_list;
 pub mod shimmer;
 pub mod spinner;
