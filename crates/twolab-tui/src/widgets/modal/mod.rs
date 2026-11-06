@@ -491,6 +491,38 @@ fn wrapped(lines: &[Line<'static>], width: u16) -> usize {
         .line_count(width.max(1))
 }
 
+/// The lines that fill `height` rows from wrapped row `top` at `width`, and
+/// how many rows of the first one are above the view. Whole lines before
+/// `top` are skipped by counting, so the scroll position stays a `usize`
+/// (ratatui's `Paragraph::scroll` takes a `u16`); only a single line taller
+/// than `u16::MAX` rows would be cut short.
+fn from_row<'l>(
+    lines: &'l [Line<'static>],
+    width: u16,
+    top: usize,
+    height: u16,
+) -> (&'l [Line<'static>], u16) {
+    let rows = |l: &Line<'static>| wrapped(std::slice::from_ref(l), width);
+    let mut start = 0;
+    let mut first = lines.len();
+    for (i, l) in lines.iter().enumerate() {
+        let n = rows(l);
+        if start + n > top {
+            first = i;
+            break;
+        }
+        start += n;
+    }
+    let skip = top - start;
+    let need = skip.saturating_add(usize::from(height));
+    let (mut end, mut got) = (first, 0);
+    while end < lines.len() && got < need {
+        got += rows(&lines[end]);
+        end += 1;
+    }
+    (&lines[first..end], u16::try_from(skip).unwrap_or(u16::MAX))
+}
+
 fn rect_clamped(r: Rect, within: Rect) -> Rect {
     let r = r.intersection(within);
     if r.is_empty() { Rect::default() } else { r }
@@ -1005,10 +1037,10 @@ impl<'a> Modal<'a> {
             buf.set_line(r.x, r.y, &line, r.width);
         }
         if !p.text.is_empty() {
-            let top = u16::try_from(p.pos.top).unwrap_or(u16::MAX);
-            Paragraph::new(p.lines.clone())
+            let (shown, skip) = from_row(&p.lines, p.text.width, p.pos.top, p.text.height);
+            Paragraph::new(shown.to_vec())
                 .wrap(Wrap { trim: false })
-                .scroll((top, 0))
+                .scroll((skip, 0))
                 .render(p.text, buf);
         }
         if let Some(track) = p.track {
@@ -1228,6 +1260,69 @@ mod tests {
             let last = Rect::new(l.body.x, l.body.bottom() - 1, l.body.width, 1);
             assert!(row_text(&buf, last).trim_end().ends_with("end."), "w={w}");
         }
+    }
+
+    /// Review #3: 70,000 numbered lines scrolled to 69,990. The footer said
+    /// 69991-69996 while the body (scrolled by a u16) showed line-65535.
+    #[test]
+    fn a_body_past_u16_max_rows_shows_the_rows_the_footer_names() {
+        let body: Vec<Line> = (0..70_000)
+            .map(|i| Line::from(format!("line-{i}")))
+            .collect();
+        let m = Modal::new("log")
+            .body(body)
+            .size(PopupSize::Cells(40), PopupSize::Cells(10))
+            .theme(Theme::ansi());
+        let mut st = ModalState::new();
+        st.scroll_to(69_990);
+        let (buf, l) = draw(&m, &mut st, 60, 20);
+        assert_eq!(st.scroll, 69_990);
+        let first = Rect::new(l.body.x, l.body.y, l.body.width, 1);
+        assert_eq!(row_text(&buf, first).trim_end(), "line-69990");
+        let last = (69_990 + l.pos.viewport).min(70_000);
+        let label = format!("69991-{last} of 70000");
+        let bottom = Rect::new(l.outer.x, l.outer.bottom() - 1, l.outer.width, 1);
+        assert!(row_text(&buf, bottom).contains(&label), "{label}");
+        let end = Rect::new(l.body.x, l.body.y + (last - 69_991) as u16, l.body.width, 1);
+        assert_eq!(row_text(&buf, end).trim_end(), format!("line-{}", last - 1));
+        // Scrolled into a line that wraps: its tail rows, not its first.
+        let body = vec![
+            Line::from("a"),
+            Line::from("bbbb cccc dddd eeee"),
+            Line::from("z"),
+        ];
+        let m = Modal::new("w")
+            .body(body)
+            .size(PopupSize::Cells(10), PopupSize::Cells(6))
+            .theme(Theme::ansi());
+        let mut st = ModalState::new();
+        st.scroll_to(2);
+        let (buf, l) = draw(&m, &mut st, 20, 10);
+        let rows: Vec<String> = (0..l.body.height)
+            .map(|y| row_text(&buf, Rect::new(l.body.x, l.body.y + y, l.body.width, 1)))
+            .map(|r| r.trim_end().to_string())
+            .collect();
+        let full: Vec<String> = {
+            let all = Paragraph::new(vec![
+                Line::from("a"),
+                Line::from("bbbb cccc dddd eeee"),
+                Line::from("z"),
+            ])
+            .wrap(Wrap { trim: false });
+            let area = Rect::new(0, 0, l.body.width, 20);
+            let mut b = Buffer::empty(area);
+            all.render(area, &mut b);
+            (0..20)
+                .map(|y| {
+                    row_text(&b, Rect::new(0, y, l.body.width, 1))
+                        .trim_end()
+                        .to_string()
+                })
+                .collect()
+        };
+        let top = st.scroll;
+        assert!(top > 0);
+        assert_eq!(rows[..], full[top..top + rows.len()]);
     }
 
     #[test]
