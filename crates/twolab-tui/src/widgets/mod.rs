@@ -16,6 +16,7 @@ pub mod ledger;
 pub mod menu;
 pub mod meter;
 pub mod mini_bar;
+pub mod modal;
 pub mod multi_select;
 pub mod packed_grid;
 pub mod pager;
