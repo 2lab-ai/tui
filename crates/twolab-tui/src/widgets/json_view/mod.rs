@@ -21,6 +21,11 @@
 //!   scroll itself (llmux returned the maximum for the runtime to clamp);
 //! - a footer says `lines 12–40 of 213`, so a scrolled view is never mistaken
 //!   for the whole body.
+//! - the wrapped row counts are measured once per body and width and kept
+//!   in the [`JsonViewState`] (llmux re-wrapped every line every frame).
+//!   Keep one state per body: when the lines change, create a new state or
+//!   call [`JsonViewState::invalidate`] / [`JsonViewState::set_generation`];
+//!   the state cannot tell a new body of the same length from the old one.
 
 #[cfg(feature = "catalog")]
 pub(crate) mod docs;
@@ -407,8 +412,17 @@ pub fn wrap_line(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
 
 /// Scroll position, kept by the host between frames. It also remembers how
 /// many rows each line wraps to, so a frame over a large body (llmux's raw
-/// viewer shows bodies up to 8 MiB) does not re-measure every line: the
-/// measurement is redone only when the lines or the width change.
+/// viewer shows bodies up to 8 MiB) does not re-measure every line.
+///
+/// **One `JsonViewState` per body.** The remembered rows belong to the
+/// body they were measured on, and the state cannot see when the lines
+/// change (a new body can sit at the old one's address with the same
+/// length). When the lines change, create a new state, or call
+/// [`JsonViewState::invalidate`] or [`JsonViewState::set_generation`] on
+/// this one. The rows are kept per (generation, number of lines, width): a
+/// body rebuilt each frame with the same content is measured once, and a
+/// body of another length is never drawn with the old rows, but a body of
+/// the same length is only told apart by its generation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JsonViewState {
     /// First visible row (wrapped rows, not source lines).
@@ -416,6 +430,8 @@ pub struct JsonViewState {
     max_scroll: Option<usize>,
     page: usize,
     shown: Option<(usize, usize, usize)>,
+    /// Which body the host says this is.
+    generation: u64,
     /// Row starts per line at the last two widths (with and without the
     /// scrollbar column), most recent first.
     rows: Vec<RowIndex>,
@@ -424,8 +440,8 @@ pub struct JsonViewState {
 /// Where each line's first row sits once wrapped at `width`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RowIndex {
-    /// The lines measured: slice address and length, and the width.
-    key: (usize, usize, usize),
+    /// The lines measured: generation, number of lines, width.
+    key: (u64, usize, usize),
     starts: Vec<usize>,
     total: usize,
 }
@@ -463,16 +479,35 @@ impl JsonViewState {
         self.max_scroll
     }
 
-    /// Forget the remembered row counts. Call it when the host edits its
-    /// lines in place (same `Vec`, same length); a new or resized `Vec` is
-    /// noticed on its own.
+    /// The lines changed (a new body, or the old one edited): forget the
+    /// remembered row counts and start a new generation. Call it, or
+    /// [`JsonViewState::set_generation`], or use a new state, whenever the
+    /// lines change; the scroll position stays (clamped at the next render).
     pub fn invalidate(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
         self.rows.clear();
     }
 
-    /// The row index for `lines` at `width`, measured once per (lines, width).
+    /// Say which body the next renders show, for a host that already
+    /// numbers its bodies (a record id, a revision): a different number
+    /// from the last one forgets the remembered row counts, the same number
+    /// keeps them.
+    pub fn set_generation(&mut self, generation: u64) {
+        if generation != self.generation {
+            self.generation = generation;
+            self.rows.clear();
+        }
+    }
+
+    /// The generation the remembered rows belong to (0 for a new state).
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// The row index for `lines` at `width`, measured once per (generation,
+    /// number of lines, width).
     fn index(&mut self, lines: &[Line<'static>], width: usize) -> &RowIndex {
-        let key = (lines.as_ptr() as usize, lines.len(), width);
+        let key = (self.generation, lines.len(), width);
         match self.rows.iter().position(|r| r.key == key) {
             Some(0) => {}
             Some(i) => self.rows.swap(0, i),
@@ -831,13 +866,80 @@ mod tests {
             keys,
             "nothing re-measured"
         );
-        // A new body is noticed without invalidate().
+        // The slice address is not the identity: the same body rebuilt in
+        // another allocation (a host that builds its lines per frame) is
+        // not measured again.
+        let copy = lines.clone();
+        assert_ne!(copy.as_ptr(), lines.as_ptr());
+        assert_eq!(snapshot::lines(&render(&copy, &mut s, 40, 11)), first);
+        assert_eq!(
+            s.rows.iter().map(|r| r.key).collect::<Vec<_>>(),
+            keys,
+            "the copy is not re-measured"
+        );
+        // A body of another length never reuses the old rows (a guard, not
+        // the contract: the host still says when its lines change).
         let fewer = numbered(3);
         let rows = snapshot::lines(&render(&fewer, &mut s, 40, 11));
         assert_eq!(rows[0], "\"line\": 1");
         assert_eq!(s.max_scroll(), Some(0));
         s.invalidate();
         assert!(s.rows.is_empty());
+    }
+
+    /// Review #2 (first reviewer): `["a"]` drawn at 5×3, then a body of the
+    /// same length in the same allocation, one 20-cell line. The rows are
+    /// the old body's until the host says the lines changed; after
+    /// `invalidate()` the new body scrolls to 3, as a fresh state does.
+    #[test]
+    fn a_new_body_at_the_old_address_is_measured_after_invalidate() {
+        let mut lines = vec![Line::from("a")];
+        let mut s = JsonViewState::default();
+        render(&lines, &mut s, 5, 3);
+        assert_eq!(s.max_scroll(), Some(0));
+        let at = lines.as_ptr();
+        lines.clear();
+        lines.push(Line::from("x".repeat(20)));
+        assert_eq!(lines.as_ptr(), at, "same address, same length");
+        let before = s.generation();
+        s.invalidate();
+        assert_ne!(s.generation(), before, "invalidate() is a new generation");
+        render(&lines, &mut s, 5, 3);
+        assert_eq!(s.max_scroll(), Some(3));
+        let mut fresh = JsonViewState::default();
+        render(&lines, &mut fresh, 5, 3);
+        assert_eq!(fresh.max_scroll(), Some(3));
+    }
+
+    /// Review #2 (second reviewer): bodies A and B, five short lines each,
+    /// then C, five 60-cell lines, in A's allocation. A generation per body
+    /// tells them apart; C draws as on a fresh state.
+    #[test]
+    fn same_length_bodies_are_told_apart_by_generation() {
+        let mut a = numbered(5);
+        let b: Vec<Line<'static>> = (1..=5).map(|i| Line::from(format!("\"b\": {i}"))).collect();
+        let mut s = JsonViewState::default();
+        s.set_generation(1);
+        render(&a, &mut s, 30, 5);
+        s.set_generation(2);
+        render(&b, &mut s, 30, 5);
+        let at = a.as_ptr();
+        a.clear();
+        a.extend((0..5).map(|i| Line::from(format!("{i}{}", "c".repeat(59)))));
+        assert_eq!(a.as_ptr(), at, "C in A's allocation");
+        s.set_generation(3);
+        assert_eq!(s.generation(), 3);
+        let got = snapshot::lines(&render(&a, &mut s, 30, 5));
+        let mut fresh = JsonViewState::default();
+        let want = snapshot::lines(&render(&a, &mut fresh, 30, 5));
+        assert_eq!(got, want);
+        assert_eq!(s.max_scroll(), Some(11));
+        assert_eq!(s.max_scroll(), fresh.max_scroll());
+        assert_eq!(s.shown(), fresh.shown());
+        // The same generation again keeps the rows.
+        let keys: Vec<_> = s.rows.iter().map(|r| r.key).collect();
+        s.set_generation(3);
+        assert_eq!(s.rows.iter().map(|r| r.key).collect::<Vec<_>>(), keys);
     }
 
     #[test]

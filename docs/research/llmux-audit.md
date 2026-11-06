@@ -92,6 +92,7 @@ Lower value: working (connecting screen `src/tui/ui.rs:4700-4733`: spinner + how
 - Gap: a position footer; long strings wrapped at the width instead of chunked at 2048 bytes (chunking breaks string highlighting mid-token) and panned.
 - Verdict: EXTEND — `JsonView` recomputes `wrapped_rows` for every line on every render (`json_view/mod.rs:482-484`, called twice per render at `:499-505`), which is too slow for 8 MiB bodies at the 120 ms tick (`src/tui/mod.rs:180`); needs a per-width row cache (the pager already has one) and must accept the General/headers lines (`src/tui/ui.rs:4174-4209`, `:4292-4365`) as plain lines.
 - Effort M; risk: raw-modal tests, `raw_body_lines_*` ports.
+- Row cache: done in `1cef220`. Correction to that commit's message, which says "a new or resized Vec is noticed on its own": it keyed the cache on the slice address, and a new body of the same length can reuse the old allocation, so it drew the old body's rows. The cache is now keyed on a host generation, the line count and the width; one `JsonViewState` per body, and `invalidate()` or `set_generation(n)` whenever the lines change.
 
 ### key_hints
 - Catalog: `KeyHints` footer fitted to width by priority; `KeyHelp` grouped help in 3/2/1 columns.
