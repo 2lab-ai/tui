@@ -1,3 +1,14 @@
+// Derived from herdrdev/herdr `src/client/shell/global_menu.rs`
+// (`global_menu_item_has_badge`) and `src/client/shell/overlays.rs`
+// (`render_global_menu`) at ee5bfb5041bb3e4a49d591c72308aae3c81ecdde
+// (Apache-2.0). Modified by 2lab: the badge is any glyph or word the host
+// picks (default `◉`, East-Asian Narrow) drawn after the label, not herdr's
+// accent-coloured `●` (Ambiguous width, colour-only in a monochrome
+// terminal); opening above a launcher rect is one placement rule with the
+// cell anchor's, and when neither side holds the whole menu it shrinks into
+// the taller side (scrolling, `+N more`) instead of clamping over the
+// launcher; every rect stays inside the bounds.
+
 //! A context menu: what you can do to this thing, right where you clicked.
 //!
 //! Ported from llmux `src/tui/ui.rs` (MIT, 2lab): `draw_context_menu`,
@@ -15,6 +26,13 @@
 //!   keys; the selection skips what cannot run;
 //! - a menu taller than the screen scrolls to the selection and counts the
 //!   rest (`+N more`) instead of cutting them silently.
+//!
+//! From herdr's global menu (`shell/global_menu.rs`, Apache-2.0): a per-item
+//! attention badge ([`MenuItem::badge`], `update ready ◉`) and opening above
+//! a launcher button ([`Menu::anchor_above`]). Wherever it is anchored, the
+//! popup never covers the anchor row while a framed item fits on either
+//! side: it flips, and when neither side holds every item it takes the
+//! taller side and scrolls.
 
 #[cfg(feature = "catalog")]
 pub(crate) mod docs;
@@ -28,8 +46,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, StatefulWidget, Widget};
 
 use crate::input::{Key, KeyInput};
-use crate::text::{self, Align};
+use crate::text;
 use crate::theme::{Status, Theme};
+
+/// The default attention badge: U+25C9, East-Asian Narrow, so it is one
+/// cell on a CJK terminal.
+pub const ATTENTION: &str = "◉";
 
 /// One row of a menu: an action or a separator.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +63,9 @@ pub struct MenuItem<'a> {
     pub disabled: bool,
     /// Drawn in the failure colour (bold in mono): delete, revoke, reset.
     pub destructive: bool,
+    /// Something here wants attention (an update, a failed check): a glyph
+    /// or a word after the label, bold in the accent.
+    pub badge: Option<Cow<'a, str>>,
     separator: bool,
 }
 
@@ -51,8 +76,21 @@ impl<'a> MenuItem<'a> {
             key: None,
             disabled: false,
             destructive: false,
+            badge: None,
             separator: false,
         }
+    }
+
+    /// A badge after the label: a glyph (`◉`) or a word (`new`, `3`). It
+    /// stays when the key gives way and is cut last.
+    pub fn badge(mut self, badge: impl Into<Cow<'a, str>>) -> MenuItem<'a> {
+        self.badge = Some(badge.into());
+        self
+    }
+
+    /// The default badge, [`ATTENTION`] (`◉`).
+    pub fn attention(self) -> MenuItem<'a> {
+        self.badge(ATTENTION)
     }
 
     /// A rule between groups of items. Never selected, never hit.
@@ -114,6 +152,8 @@ pub struct MenuLayout {
     pub items: Vec<MenuHit>,
     /// Items scrolled out of a popup the screen is too short for.
     pub hidden: usize,
+    /// The popup opened above its anchor.
+    pub above: bool,
 }
 
 impl MenuLayout {
@@ -231,16 +271,23 @@ impl MenuState {
 pub struct Menu<'a> {
     title: Option<Cow<'a, str>>,
     items: Vec<MenuItem<'a>>,
-    anchor: (u16, u16),
+    /// The clicked cell or launcher button the popup keeps clear of.
+    anchor: Rect,
+    /// Opens above the anchor first (a launcher at the bottom of a screen).
+    above: bool,
     theme: Theme,
 }
+
+/// Rows the smallest framed menu takes: border, one item, border.
+const MIN_ROWS: u16 = 3;
 
 impl<'a> Menu<'a> {
     pub fn new(items: impl IntoIterator<Item = MenuItem<'a>>) -> Menu<'a> {
         Menu {
             title: None,
             items: items.into_iter().collect(),
-            anchor: (0, 0),
+            anchor: Rect::new(0, 0, 1, 1),
+            above: false,
             theme: Theme::default(),
         }
     }
@@ -251,10 +298,35 @@ impl<'a> Menu<'a> {
         self
     }
 
-    /// The clicked cell `(col, row)`. The menu opens on the row below it.
+    /// The clicked cell `(col, row)`. The menu opens on the row below it,
+    /// or above it when there is no room below.
     pub fn anchor(mut self, col: u16, row: u16) -> Menu<'a> {
-        self.anchor = (col, row);
+        self.anchor = Rect::new(col, row, 1, 1);
+        self.above = false;
         self
+    }
+
+    /// A launcher button: the menu opens above it (herdr's `menu` in a
+    /// sidebar footer), or below when there is no room above, and lines up
+    /// with its left edge (its right edge near the screen's right side).
+    pub fn anchor_above(mut self, launcher: Rect) -> Menu<'a> {
+        self.anchor = launcher;
+        self.above = true;
+        self
+    }
+
+    /// A launcher button the menu opens below (a header button), or above
+    /// when there is no room below.
+    pub fn anchor_below(mut self, launcher: Rect) -> Menu<'a> {
+        self.anchor = launcher;
+        self.above = false;
+        self
+    }
+
+    /// Whether any item carries a badge — for a launcher that says so too
+    /// (`menu ◉`).
+    pub fn has_badge(&self) -> bool {
+        self.items.iter().any(|i| i.badge.is_some() && !i.separator)
     }
 
     pub fn theme(mut self, theme: Theme) -> Menu<'a> {
@@ -274,7 +346,8 @@ impl<'a> Menu<'a> {
             .filter(|i| !i.separator)
             .map(|i| {
                 let key = i.key.as_deref().map_or(0, |k| text::width(k) + 2);
-                text::width(&i.label) + key + 2
+                let badge = i.badge.as_deref().map_or(0, |b| text::width(b) + 1);
+                text::width(&i.label) + badge + key + 2
             })
             .max()
             .unwrap_or(0);
@@ -282,38 +355,69 @@ impl<'a> Menu<'a> {
         items.max(title)
     }
 
-    /// Where the popup goes inside `bounds`: under the anchor row, or above
-    /// it when there is no room below; from the anchor column rightwards,
-    /// or leftwards when there is no room to the right; clamped to `bounds`.
+    /// Where the popup goes inside `bounds`. Vertically: on the preferred
+    /// side of the anchor (below, or above for [`Menu::anchor_above`]),
+    /// else the other side; when neither holds every item, the taller side,
+    /// shortened (the items scroll and say `+N more`) — so the anchor row
+    /// stays visible. Only when neither side holds a framed item does the
+    /// popup sit over the anchor. Horizontally: from the anchor's left edge
+    /// rightwards, else ending at its right edge, else clamped. Always
+    /// inside `bounds`.
     pub fn area(&self, bounds: Rect) -> Rect {
+        self.place(bounds).0
+    }
+
+    /// The popup rect and whether it opened above the anchor.
+    fn place(&self, bounds: Rect) -> (Rect, bool) {
         let w = (self.content_width() as u16)
             .saturating_add(2)
             .min(bounds.width);
-        let h = (self.items.len() as u16)
+        let want = (self.items.len() as u16)
             .saturating_add(2)
             .min(bounds.height);
-        let (ax, ay) = self.anchor;
-        let x = if ax.saturating_add(w) <= bounds.right() {
-            ax
-        } else if ax.saturating_add(1) >= bounds.x.saturating_add(w) {
-            ax + 1 - w
+        let a = self.anchor;
+        let x = if a.x.saturating_add(w) <= bounds.right() {
+            a.x
+        } else if a.right() >= bounds.x.saturating_add(w) {
+            a.right() - w
         } else {
             bounds.right() - w
         };
-        let below = ay.saturating_add(1);
-        let y = if below.saturating_add(h) <= bounds.bottom() {
-            below
-        } else if ay >= bounds.y.saturating_add(h) {
-            ay - h
+        // Free rows below and above the anchor, inside the bounds.
+        let below_y = a.bottom().clamp(bounds.y, bounds.bottom());
+        let above_end = a.y.clamp(bounds.y, bounds.bottom());
+        let room_below = bounds.bottom() - below_y;
+        let room_above = above_end - bounds.y;
+        let room = |up: bool| if up { room_above } else { room_below };
+        let (first, second) = (self.above, !self.above);
+        let up = if room(first) >= want {
+            Some(first)
+        } else if room(second) >= want {
+            Some(second)
         } else {
-            bounds.bottom() - h
+            let taller = if room(first) >= room(second) {
+                first
+            } else {
+                second
+            };
+            (room(taller) >= want.min(MIN_ROWS)).then_some(taller)
         };
-        Rect::new(
+        let (y, h) = match up {
+            Some(true) => {
+                let h = want.min(room_above);
+                (above_end - h, h)
+            }
+            Some(false) => (below_y, want.min(room_below)),
+            // Too short to keep the anchor clear: clamped over it.
+            None => (bounds.bottom() - want, want),
+        };
+        let rect = Rect::new(
             x.clamp(bounds.x, bounds.right() - w),
             y.clamp(bounds.y, bounds.bottom() - h),
             w,
             h,
-        )
+        );
+        (rect, up == Some(true))
     }
 
     fn row_style(&self, item: &MenuItem, selected: bool) -> Style {
@@ -337,24 +441,44 @@ impl<'a> Menu<'a> {
         }
     }
 
-    /// One action row, exactly `w` cells.
+    /// One action row, exactly `w` cells: ` label badge   key `.
     fn row_line(&self, item: &MenuItem, selected: bool, w: usize) -> Line<'static> {
         let t = &self.theme;
         let style = self.row_style(item, selected);
         let key_style = if selected { style } else { t.dim() };
+        let badge_style = if selected {
+            style
+        } else if item.disabled {
+            t.dim()
+        } else {
+            t.accent().add_modifier(Modifier::BOLD)
+        };
         let inner = w.saturating_sub(2);
+        let badge = item.badge.as_deref().unwrap_or("");
+        let badge_w = text::width(badge);
+        // The badge stays while a label cell fits beside it.
+        let badge_room = if badge_w > 0 && badge_w + 2 <= inner {
+            badge_w + 1
+        } else {
+            0
+        };
         let key = item.key.as_deref().unwrap_or("");
         let key_w = text::width(key);
-        // The label keeps at least half the row; the key gives way first.
-        let (label_w, key) = if key_w > 0 && text::width(&item.label) + 2 + key_w <= inner {
-            (inner - key_w, key)
+        // The key gives way first.
+        let key = if key_w > 0 && text::width(&item.label) + badge_room + 2 + key_w <= inner {
+            key
         } else {
-            (inner, "")
+            ""
         };
-        let mut spans = vec![
-            Span::styled(" ", style),
-            Span::styled(text::pad(&item.label, label_w, Align::Left), style),
-        ];
+        let label_room = inner - badge_room - text::width(key);
+        let label = text::truncate(&item.label, label_room).into_owned();
+        let pad = label_room - text::width(&label);
+        let mut spans = vec![Span::styled(" ", style), Span::styled(label, style)];
+        if badge_room > 0 {
+            spans.push(Span::styled(" ", style));
+            spans.push(Span::styled(badge.to_string(), badge_style));
+        }
+        spans.push(Span::styled(" ".repeat(pad), style));
         if !key.is_empty() {
             spans.push(Span::styled(key.to_string(), key_style));
         }
@@ -371,7 +495,8 @@ impl StatefulWidget for &Menu<'_> {
     fn render(self, bounds: Rect, buf: &mut Buffer, state: &mut MenuState) {
         state.layout = MenuLayout::default();
         state.settle(self);
-        let area = self.area(bounds);
+        let (area, above) = self.place(bounds);
+        state.layout.above = above;
         if area.is_empty() {
             return;
         }
@@ -503,10 +628,14 @@ mod tests {
         let menu = account_menu().anchor(38, 1);
         render(&menu, &mut state, 40, 14);
         assert_eq!(state.layout.area, Rect::new(22, 2, 17, 8));
-        // No room either way: clamped inside the frame.
+        // No room for all 8 rows either way: the taller side (5 rows above
+        // row 5), shortened, never over the clicked row. (This used to clamp
+        // to rows 2–9, covering it.)
         let menu = account_menu().anchor(10, 5);
         render(&menu, &mut state, 40, 10);
-        assert_eq!(state.layout.area, Rect::new(10, 2, 17, 8));
+        assert_eq!(state.layout.area, Rect::new(10, 0, 17, 5));
+        assert!(state.layout.above);
+        assert_eq!(state.layout.hidden, 3);
     }
 
     #[test]
@@ -565,8 +694,11 @@ mod tests {
         state.on_key(&menu, Key::End.into());
         let buf = render(&menu, &mut state, 30, 5);
         let lines = snapshot::lines(&buf);
-        assert_eq!(state.layout.hidden, 3);
-        assert!(lines[4].contains("+3 more"), "{lines:?}");
+        // Rows 1–4 under the clicked row 0 (it used to cover row 0 too): two
+        // items show, four are counted.
+        assert_eq!(state.layout.area, Rect::new(0, 1, 17, 4));
+        assert_eq!(state.layout.hidden, 4);
+        assert!(lines[4].contains("+4 more"), "{lines:?}");
         assert!(lines.iter().any(|l| l.contains("delete")), "{lines:?}");
         assert_eq!(state.layout.items.last().map(|h| h.index), Some(5));
         // Down to one cell: no panic.
@@ -588,5 +720,108 @@ mod tests {
         assert!(at(4).contains(Modifier::DIM), "disabled");
         assert!(at(7).contains(Modifier::BOLD), "destructive");
         assert!(!at(3).intersects(Modifier::REVERSED | Modifier::DIM | Modifier::BOLD));
+    }
+
+    /// herdr's global menu: settings and the update carry a badge.
+    fn global_menu() -> Menu<'static> {
+        Menu::new([
+            MenuItem::new("settings").attention(),
+            MenuItem::new("keybinds").key("?"),
+            MenuItem::new("reload config"),
+            MenuItem::new("update ready").badge("new"),
+            MenuItem::new("detach").key("d"),
+        ])
+        .theme(Theme::ansi())
+    }
+
+    #[test]
+    fn badges_are_a_glyph_or_word_after_the_label() {
+        let launcher = Rect::new(1, 13, 6, 1);
+        let menu = global_menu().anchor_above(launcher);
+        assert!(menu.has_badge());
+        let mut state = MenuState::new(&menu);
+        state.on_key(&menu, Key::Down.into());
+        let buf = render(&menu, &mut state, 40, 14);
+        let lines = snapshot::lines(&buf);
+        assert_eq!(lines[6], " ┌──────────────────┐");
+        assert_eq!(lines[7], " │ settings ◉       │");
+        assert_eq!(lines[8], " │ keybinds       ? │");
+        assert_eq!(lines[10], " │ update ready new │");
+        assert_eq!(lines[12], " └──────────────────┘");
+        // Bold in the accent; in mono bold alone still marks it.
+        assert!(buf[(12, 7)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buf[(12, 7)].fg, Color::Cyan);
+        assert!(!buf[(4, 7)].modifier.contains(Modifier::BOLD), "label");
+        let menu = menu.theme(Theme::mono());
+        let buf = render(&menu, &mut state, 40, 14);
+        assert!(buf[(12, 7)].modifier.contains(Modifier::BOLD));
+        assert!(!buf[(4, 7)].modifier.contains(Modifier::BOLD));
+        assert_eq!(unicode_width::UnicodeWidthStr::width_cjk(ATTENTION), 1);
+        assert!(!account_menu().has_badge());
+    }
+
+    #[test]
+    fn narrow_rows_drop_the_key_then_cut_the_label_keeping_the_badge() {
+        let menu = Menu::new([MenuItem::new("integrations").key("i").attention()])
+            .anchor(0, 0)
+            .theme(Theme::ansi());
+        let mut state = MenuState::new(&menu);
+        assert_eq!(
+            snapshot::lines(&render(&menu, &mut state, 40, 4))[2],
+            "│ integrations ◉  i │"
+        );
+        assert_eq!(
+            snapshot::lines(&render(&menu, &mut state, 18, 4))[2],
+            "│ integrations ◉ │"
+        );
+        assert_eq!(
+            snapshot::lines(&render(&menu, &mut state, 16, 4))[2],
+            "│ integrati… ◉ │"
+        );
+        assert_eq!(
+            snapshot::lines(&render(&menu, &mut state, 10, 4))[2],
+            "│ int… ◉ │"
+        );
+    }
+
+    // herdr's `render_global_menu` opens above the launcher at
+    // `launcher.y - height` and clamps to the screen top, covering the
+    // launcher on a short screen. Here it flips below or shrinks instead.
+    #[test]
+    fn opens_above_a_launcher_and_never_over_it() {
+        let launcher = Rect::new(2, 12, 6, 1);
+        let mut state = MenuState::default();
+        let menu = global_menu().anchor_above(launcher);
+        render(&menu, &mut state, 40, 14);
+        assert_eq!(state.layout.area, Rect::new(2, 5, 20, 7));
+        assert!(state.layout.above);
+        // A launcher at the top: no room above, so it opens below.
+        let menu = global_menu().anchor_above(Rect::new(2, 0, 6, 1));
+        render(&menu, &mut state, 40, 14);
+        assert_eq!(state.layout.area, Rect::new(2, 1, 20, 7));
+        assert!(!state.layout.above);
+        // Near the right edge it ends at the launcher's right edge.
+        let menu = global_menu().anchor_above(Rect::new(30, 12, 8, 1));
+        render(&menu, &mut state, 40, 14);
+        assert_eq!(state.layout.area.right(), 38);
+        // Short screens, every launcher row: inside the bounds, and off the
+        // launcher's row whenever a framed item fits on one side.
+        for h in 1..=14u16 {
+            for row in 0..h {
+                let launcher = Rect::new(2, row, 6, 1);
+                let menu = global_menu().anchor_above(launcher);
+                let bounds = Rect::new(0, 0, 40, h);
+                render(&menu, &mut state, 40, h);
+                let area = state.layout.area;
+                assert_eq!(area.intersection(bounds), area, "h={h} row={row}");
+                let room = row.max(h - row - 1);
+                if room >= 3 {
+                    assert!(
+                        area.bottom() <= row || area.y > row,
+                        "h={h} row={row} {area:?}"
+                    );
+                }
+            }
+        }
     }
 }
