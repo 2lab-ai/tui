@@ -19,7 +19,7 @@ npm run build:site                # builds the wasm module (rustup toolchain) + 
     places the result inside its own table cell or paragraph, a `line()` / `lines()` / `spans()` that returns ratatui
     text. Module docs say where it came from (project, file, licence) and what it tells the person.
   - `docs.rs` — `pub(crate) const DOC: ComponentDoc` behind `#[cfg(feature = "catalog")]`: summary (one sentence ending
-    in a full stop, what it tells the person), description (≥ 80 chars), `used_in`, `source` (project `llmux|codex|fx|2lab`,
+    in a full stop, what it tells the person), description (≥ 80 chars), `used_in`, `source` (project `llmux|codex|fx|herdr|2lab`,
     a permalink, licence `MIT|Apache-2.0`, how `ported|studied|new`), props (builder methods), keyboard, a11y (≥ 1),
     a usage snippet that imports `twolab_tui`, and **≥ 3 demos with realistic data** (no network, no clock).
   - Tests in `mod.rs` (`#[cfg(test)]`): render into a `Buffer` and assert on `snapshot::text` / `snapshot::lines` and on
@@ -48,7 +48,7 @@ npm run build:site                # builds the wasm module (rustup toolchain) + 
 - No layout jitter: widths that depend on live values are measured on the widest form the value can take.
 
 ## Ported code
-- Code carried over from OpenAI Codex or Vercel fx (both Apache-2.0) keeps a header comment naming the upstream file,
+- Code carried over from OpenAI Codex, Vercel fx or herdr (all Apache-2.0) keeps a header comment naming the upstream file,
   the upstream commit and "Modified by 2lab". Add the file to `NOTICE`. Do not port OpenAI or Vercel branding (logos,
   product colour names, bundled themes).
 - Code from llmux (MIT, 2lab) is relicensed by its owner; name the upstream file in the module docs.

@@ -47,7 +47,7 @@ fn every_doc_is_complete() {
             "{s}: how"
         );
         assert!(
-            matches!(d.source.project, "llmux" | "codex" | "fx" | "2lab"),
+            matches!(d.source.project, "llmux" | "codex" | "fx" | "herdr" | "2lab"),
             "{s}: project"
         );
         assert!(!d.a11y.is_empty(), "{s}: a11y");

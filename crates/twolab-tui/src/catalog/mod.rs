@@ -48,7 +48,7 @@ impl Group {
 /// and licence; the NOTICE file carries the same list.
 #[derive(Debug, Clone, Copy)]
 pub struct Source {
-    /// `llmux`, `codex`, `fx` or `2lab`.
+    /// `llmux`, `codex`, `fx`, `herdr` or `2lab`.
     pub project: &'static str,
     /// A permalink to the code it was taken from (or studied, for a re-write).
     pub url: &'static str,
