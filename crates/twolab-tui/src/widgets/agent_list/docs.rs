@@ -134,9 +134,9 @@ fn accounts(focused: usize) -> Vec<AgentItem> {
             let n = i + 1;
             let provider = ["claude", "claude", "codex", "claude", "grok"][i % 5];
             let label = match provider {
-                "codex" => format!("codex:ai{n}@insightquest.io"),
+                "codex" => format!("codex:ai{n}@acme-quota.test"),
                 "grok" => format!("grok:ai{n}@iq.io"),
-                _ => format!("ai{n}@insightquest.io"),
+                _ => format!("ai{n}@acme-quota.test"),
             };
             let item = match i {
                 5 | 17 => AgentItem::new(AgentState::Failed, label)

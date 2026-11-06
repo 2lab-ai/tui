@@ -42,10 +42,10 @@ fn backdrop(area: Rect, buf: &mut Buffer, t: &Theme) {
         " llmux 0.2.26 · 29 accounts · 3 in flight · ↻ 2m",
         "",
         "   group   #  account                 status    7d left   reset",
-        "   claude  1  ai1@insightquest.io     ok          62%     3d 4h",
-        "   claude  2  ai2@insightquest.io     cooling      0%     1h 12m",
-        "   claude  3  ai3@insightquest.io     ok          88%     5d 1h",
-        "   codex   4  codex:icedac@gmail.com  ok          41%     2d 9h",
+        "   claude  1  ai1@acme-quota.test     ok          62%     3d 4h",
+        "   claude  2  ai2@acme-quota.test     cooling      0%     1h 12m",
+        "   claude  3  ai3@acme-quota.test     ok          88%     5d 1h",
+        "   codex   4  codex:ops@acme.example  ok          41%     2d 9h",
         "   codex   5  codex:ai5@iq.io         error        —      —",
         "   grok    6  grok:ai6@iq.io          ok          97%     6d 2h",
         "",
@@ -75,11 +75,11 @@ fn backdrop(area: Rect, buf: &mut Buffer, t: &Theme) {
 
 fn failures() -> [&'static str; 5] {
     [
-        "ai15@insightquest.io     401 token expired",
-        "ai7@insightquest.io      timeout after 10s",
-        "codex:icedac@gmail.com   connection refused",
+        "ai15@acme-quota.test     401 token expired",
+        "ai7@acme-quota.test      timeout after 10s",
+        "codex:ops@acme.example   connection refused",
         "grok:ai6@iq.io           429 rate limited",
-        "ai9@insightquest.io      500 upstream error",
+        "ai9@acme-quota.test      500 upstream error",
     ]
 }
 
@@ -88,7 +88,7 @@ fn stack(area: Rect, buf: &mut Buffer, cx: &DemoCx) {
     backdrop(area, buf, &t);
     let toasts = [
         Toast::attention("claude needs attention").body("repo tui · tab 2 · pane 1"),
-        Toast::ok("copied to clipboard").body("ai15@insightquest.io"),
+        Toast::ok("copied to clipboard").body("ai15@acme-quota.test"),
         Toast::fail("usage refresh: 5 of 29 failed").lines(failures()),
     ];
     ToastStack::new(&toasts)
@@ -114,7 +114,7 @@ fn script() -> Vec<(Duration, Toast)> {
         ),
         (
             ms(2_000),
-            Toast::ok("copied ai15@insightquest.io").ttl(ms(3_000)),
+            Toast::ok("copied ai15@acme-quota.test").ttl(ms(3_000)),
         ),
         (
             ms(2_400),

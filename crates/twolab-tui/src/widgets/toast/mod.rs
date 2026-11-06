@@ -1223,9 +1223,9 @@ mod tests {
 
     fn refresh_failed() -> Toast {
         Toast::fail("usage refresh: 3 of 5 failed").lines([
-            "ai15@insightquest.io  401 token expired",
-            "ai7@insightquest.io   timeout after 10s",
-            "codex:icedac@gmail.com  connection refused",
+            "ai15@acme-quota.test  401 token expired",
+            "ai7@acme-quota.test   timeout after 10s",
+            "codex:ops@acme.example  connection refused",
         ])
     }
 
@@ -1325,10 +1325,10 @@ mod tests {
             "{lines:?}"
         );
         assert!(
-            lines[2].contains("│   ai15@insightquest.io  401 token expired"),
+            lines[2].contains("│   ai15@acme-quota.test  401 token expired"),
             "{lines:?}"
         );
-        assert!(lines[4].contains("codex:icedac@gmail.com  connection refused"));
+        assert!(lines[4].contains("codex:ops@acme.example  connection refused"));
         assert!(lines[5].contains("└───"), "{lines:?}");
         // Right-anchored: the border ends in the last column.
         assert!(lines[0].ends_with('┐'), "{lines:?}");
