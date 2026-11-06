@@ -40,6 +40,8 @@ pub(crate) struct Row {
     pub description: Option<String>,
     pub disabled_reason: Option<String>,
     pub disabled: bool,
+    /// Values for the meta columns at the right of the row.
+    pub meta: Vec<String>,
 }
 
 impl Row {
@@ -188,6 +190,42 @@ pub(crate) struct Paint<'a> {
     pub display: RowDisplay,
     pub desc_col: usize,
     pub selected: Option<usize>,
+    /// The meta columns shown at this width, left to right: each one's
+    /// index in the list's columns (and so in a row's `meta`) and width.
+    pub columns: Vec<(usize, u16)>,
+}
+
+/// Cells the meta columns take: each column and the gap before it.
+pub(crate) fn meta_width(columns: &[(usize, u16)]) -> u16 {
+    columns
+        .iter()
+        .fold(0u16, |w, (_, c)| w.saturating_add(c.saturating_add(1)))
+}
+
+/// The meta columns of one row: a gap, then each value padded or cut with
+/// `…` to its column; `—` where a row with meta has no value for a column.
+fn paint_meta(area: Rect, buf: &mut Buffer, row: &Row, selected: bool, p: &Paint) {
+    if row.meta.is_empty() || area.is_empty() {
+        return;
+    }
+    let t = p.theme;
+    let dis = row.disabled;
+    let mut spans = Vec::with_capacity(p.columns.len() * 2);
+    // A hidden column leaves its value out: each shown column draws the
+    // value at its own index, not at its place among the shown ones.
+    for &(i, w) in &p.columns {
+        spans.push(Span::raw(" "));
+        let (value, part) = match row.meta.get(i) {
+            Some(v) => (v.as_str(), Part::Secondary),
+            None => ("—", Part::Keep(t.dim())),
+        };
+        spans.push(Span::styled(
+            text::pad(value, usize::from(w), text::Align::Left),
+            style(t, part, selected, dis),
+        ));
+    }
+    text::truncate_line(Line::from(spans), area.width as usize)
+        .render(Rect { height: 1, ..area }, buf);
 }
 
 /// Paint rows from `start` into `area` until it is full.
@@ -318,6 +356,16 @@ fn paint_row(area: Rect, buf: &mut Buffer, row: &Row, selected: bool, p: &Paint)
     if selected {
         buf.set_style(area, t.selected());
     }
+    // Meta columns take the right end; the row's own parts get the rest.
+    let meta_w = meta_width(&p.columns).min(area.width);
+    if meta_w > 0 {
+        let strip = Rect::new(area.right() - meta_w, area.y, meta_w, 1);
+        paint_meta(strip, buf, row, selected, p);
+    }
+    let area = Rect {
+        width: area.width - meta_w,
+        ..area
+    };
     let width = area.width as usize;
     let cursor = if selected { p.marks.cursor } else { "" };
     let cursor_w = text::width(p.marks.cursor);
@@ -649,6 +697,7 @@ mod tests {
                 display,
                 desc_col: col,
                 selected: sel,
+                columns: Vec::new(),
             },
         );
         buf

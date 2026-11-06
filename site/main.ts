@@ -1,4 +1,6 @@
 import { marked } from 'marked';
+import herdrAudit from '../docs/research/herdr-inventory.md?raw';
+import llmuxAudit from '../docs/research/llmux-audit.md?raw';
 import research from '../docs/research.md?raw';
 import notice from '../NOTICE?raw';
 import wasmUrl from './catalog.wasm?url';
@@ -64,7 +66,13 @@ const GROUP_NOTE: Record<CompDoc['group'], string> = {
   Input: 'what the person types, picks or presses',
   Primitives: 'the pieces the others share',
 };
-const PROJECT: Record<string, string> = { llmux: 'llmux', codex: 'OpenAI Codex', fx: 'Vercel fx', '2lab': '2lab' };
+const PROJECT: Record<string, string> = {
+  llmux: 'llmux',
+  codex: 'OpenAI Codex',
+  fx: 'Vercel fx',
+  herdr: 'herdr',
+  '2lab': '2lab',
+};
 
 // ── view state (kept across pages) ──
 
@@ -212,11 +220,11 @@ function shell(active: string, body: string): string {
     <h4>Getting started</h4>
     ${link('/', 'Introduction')}${link('/docs/installation', 'Installation')}${link('/docs/theming', 'Theming')}
     <h4>Background</h4>
-    ${link('/docs/research', 'Research', '<small>report</small>')}${link('/docs/licences', 'Sources and licences')}
+    ${link('/docs/research', 'Research', '<small>report</small>')}${link('/docs/herdr-audit', 'herdr audit')}${link('/docs/llmux-audit', 'llmux audit')}${link('/docs/licences', 'Sources and licences')}
     ${groups}
   </aside>
   <main id="main" tabindex="-1"><div class="page">${body}
-    <div class="foot">twolab-tui v${esc(doc.version)} · ratatui 0.30 widgets · every demo on this site is the Rust crate itself, compiled to WebAssembly and drawn into a cell grid · widgets from <a href="https://github.com/2lab-ai/llmux">llmux</a>, <a href="https://github.com/openai/codex">OpenAI Codex</a> (Apache-2.0) and <a href="https://github.com/vercel-labs/fx">Vercel fx</a> (Apache-2.0) — see <a href="${at('docs/licences')}" data-link>sources and licences</a></div>
+    <div class="foot">twolab-tui v${esc(doc.version)} · ratatui 0.30 widgets · every demo on this site is the Rust crate itself, compiled to WebAssembly and drawn into a cell grid · widgets from <a href="https://github.com/2lab-ai/llmux">llmux</a>, <a href="https://github.com/openai/codex">OpenAI Codex</a>, <a href="https://github.com/vercel-labs/fx">Vercel fx</a> and <a href="https://github.com/herdrdev/herdr">herdr</a> (Apache-2.0) — see <a href="${at('docs/licences')}" data-link>sources and licences</a></div>
   </div></main>
 </div>`;
 }
@@ -248,7 +256,7 @@ function homePage(): string {
   return `<section class="hero">
     <div class="crumb">twolab-tui</div>
     <h1>Terminal widgets that show what the agent is doing — in the cells you have.</h1>
-    <p class="lede">${n} ratatui widgets for agent and dashboard TUIs: quotas, live requests, key hints, pickers, pagers. ${by('llmux')} come from llmux, ${by('codex')} from OpenAI Codex, ${by('fx')} from Vercel fx. Data in, a buffer out. 16-colour, true colour or no colour. Reduced motion. CJK-safe widths.</p>
+    <p class="lede">${n} ratatui widgets for agent and dashboard TUIs: quotas, live requests, key hints, pickers, pagers. ${by('llmux')} come from llmux, ${by('codex')} from OpenAI Codex, ${by('fx')} from Vercel fx, ${by('herdr')} from herdr. Data in, a buffer out. 16-colour, true colour or no colour. Reduced motion. CJK-safe widths.</p>
     <div class="cta"><a class="btn primary" href="${at('components')}" data-link>Browse widgets</a><a class="btn" href="${at('docs/installation')}" data-link>Install</a><a class="btn" href="${at('docs/research')}" data-link>Read the research</a></div>
   </section>
   ${GROUPS.map((g) => {
@@ -413,8 +421,8 @@ function themingPage(): string {
   <p class="desc">Under <code>Motion::Reduced</code> a spinner holds its first glyph and a shimmer draws plain bold text. Clocks still count — reduced motion stops movement, not information.</p>`;
 }
 
-function researchPage(): string {
-  return `<div class="crumb">Background</div><article class="md">${marked.parse(research, { async: false })}</article>`;
+function researchPage(src: string = research): string {
+  return `<div class="crumb">Background</div><article class="md">${marked.parse(src, { async: false })}</article>`;
 }
 
 function licencesPage(): string {
@@ -426,7 +434,7 @@ function licencesPage(): string {
     `<a href="${esc(c.source.url)}" target="_blank" rel="noopener">source ↗</a>`,
   ]);
   return `<div class="crumb">Background</div><h1>Sources and licences</h1>
-  <p class="lede">The crate is Apache-2.0. Widgets carried over from OpenAI Codex and Vercel fx keep their Apache-2.0 notices; widgets from llmux (MIT, 2lab) are relicensed by their owner.</p>
+  <p class="lede">The crate is Apache-2.0. Widgets carried over from OpenAI Codex, Vercel fx and herdr keep their Apache-2.0 notices; widgets from llmux (MIT, 2lab) are relicensed by their owner.</p>
   ${table(['Widget', 'From', 'How', 'Licence', 'Upstream'], rows)}
   <h2>NOTICE</h2><pre class="code">${esc(notice)}</pre>`;
 }
@@ -516,6 +524,12 @@ function route(): void {
   } else if (path === '/docs/research') {
     body = researchPage();
     document.title = 'Research — 2lab/tui';
+  } else if (path === '/docs/herdr-audit') {
+    body = researchPage(herdrAudit);
+    document.title = 'herdr audit — 2lab/tui';
+  } else if (path === '/docs/llmux-audit') {
+    body = researchPage(llmuxAudit);
+    document.title = 'llmux audit — 2lab/tui';
   } else if (path === '/docs/licences') {
     body = licencesPage();
     document.title = 'Sources and licences — 2lab/tui';

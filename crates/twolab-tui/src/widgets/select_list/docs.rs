@@ -2,7 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 
-use super::{Outcome, RowDisplay, Search, SelectItem, SelectList};
+use super::{Column, Outcome, RowDisplay, Search, SelectItem, SelectList};
 use crate::catalog::{ComponentDoc, Demo, DemoCx, DemoDoc, Group, PropDoc, Source};
 use crate::input::KeyInput;
 use crate::render::{FlexRenderable, Renderable, RenderableItem};
@@ -25,7 +25,19 @@ match list.key(key) {
     Outcome::Cancelled => close(),
     _ => {}
 }
-frame.render_widget(&list, area);"#;
+frame.render_widget(&list, area);
+
+// A tree (herdr's navigator): depth, folding groups, meta columns, a detail line.
+let nav = SelectList::new(vec![
+    SelectItem::new("local").group(),
+    SelectItem::new("llmux").depth(1).group().detail("~/2lab.ai/llmux · main ↑2"),
+    SelectItem::new("claude").depth(2).meta(["claude", "working"]),
+    SelectItem::new("tui").depth(1).collapsed(),          // ▸ tui +3
+    SelectItem::new("shell").depth(2).meta(["terminal", "shell"]),
+])
+.columns([Column::new(11).min_width(36), Column::new(11).min_width(64)])
+.numbered(false);
+// ←/→ fold, unfold and walk; nav.toggle(i) for a click on a toggle."#;
 
 /// A list and what the last pick or cancel said.
 struct ListDemo {
@@ -189,12 +201,91 @@ fn no_match() -> Box<dyn Demo> {
     })
 }
 
+/// herdr's "Go to" navigator: machines, workspaces, panes.
+fn navigator_items() -> Vec<SelectItem> {
+    let pane = |name: &str, agent: &str, state: &str, detail: &str| {
+        SelectItem::new(name)
+            .depth(2)
+            .meta([agent, state])
+            .detail(detail)
+    };
+    vec![
+        SelectItem::new("local")
+            .group()
+            .detail("this machine · 3 workspaces"),
+        SelectItem::new("llmux")
+            .depth(1)
+            .group()
+            .detail("~/2lab.ai/llmux · main ↑2"),
+        pane(
+            "fix flaky pager test",
+            "claude",
+            "working",
+            "pane 1 · tab 2 · claude-opus-5-5 · 14 turns",
+        ),
+        pane(
+            "rotate oauth tokens",
+            "codex",
+            "blocked",
+            "pane 2 · tab 2 · waiting for approval",
+        ),
+        pane(
+            "zsh",
+            "terminal",
+            "shell",
+            "pane 3 · tab 3 · ~/2lab.ai/llmux",
+        ),
+        SelectItem::new("tui")
+            .depth(1)
+            .group()
+            .detail("~/2lab.ai/tui · port/herdr-merge-b"),
+        pane(
+            "port herdr tabs",
+            "claude",
+            "done",
+            "pane 1 · tab 1 · 31 turns",
+        ),
+        pane("catalog wasm build", "claude", "idle", "pane 2 · tab 1"),
+        SelectItem::new("herdr")
+            .depth(1)
+            .collapsed()
+            .detail("~/src/herdr · main"),
+        pane("read selection.rs", "claude", "done", "pane 1 · tab 1"),
+        pane("cargo test", "terminal", "shell", "pane 2 · tab 1"),
+        SelectItem::new("studio-mac").group().detail("ssh · online"),
+        SelectItem::new("site")
+            .depth(1)
+            .group()
+            .detail("~/site · deploy ↓1"),
+        pane(
+            "deploy preview",
+            "fx",
+            "working",
+            "pane 1 · tab 1 · vercel preview",
+        ),
+        pane("lighthouse run", "terminal", "shell", "pane 2 · tab 1"),
+    ]
+}
+
+fn navigator() -> Box<dyn Demo> {
+    Box::new(ListDemo {
+        list: SelectList::new(navigator_items())
+            .title("Go to")
+            .numbered(false)
+            .max_rows(10)
+            .columns([Column::new(11).min_width(36), Column::new(11).min_width(64)])
+            .search(Search::OnDemand)
+            .placeholder("search agents and terminals"),
+        status: None,
+    })
+}
+
 pub(crate) const DOC: ComponentDoc = ComponentDoc {
     slug: "select-list",
     name: "Select list",
     ty: "twolab_tui::select_list::SelectList",
     summary: "Which one of these to use — and which is in effect now, which cannot be picked and why.",
-    description: "A pick-one list from Codex's selection popup: `› 1. name (current)` with a description column aligned across rows, disabled rows that say why and that the cursor skips, a substring search (always on, or opened with /), digits 1–9 to pick, ▴/▾ marks and an N of M position when rows are out of view, and an honest `no match for \"…\"` when the filter empties it.",
+    description: "A pick-one list from Codex's selection popup: `› 1. name (current)` with a description column aligned across rows, disabled rows that say why and that the cursor skips, a substring search (always on, or opened with /), digits 1–9 to pick, ▴/▾ marks and an N of M position when rows are out of view, and an honest `no match for \"…\"` when the filter empties it. Trees from herdr's navigator opt in per item: depth with ├─ └─ │ connectors, ▾/▸ group rows that fold (←/→) and say how many rows they hide, meta columns at the right that appear by width, and a detail line for the selected row.",
     used_in: "Codex's /model, /approvals and other pickers. llmux's context menu, config rows and account switcher are the planned hosts.",
     source: Source {
         project: "codex",
@@ -247,6 +338,30 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
             description: "SelectGlyphs::ascii() for > ^ v; SelectGlyphs::arrows() opts into Codex's ↑ ↓ (Ambiguous width).",
         },
         PropDoc {
+            name: "SelectItem .depth(n) / .group() / .collapsed()",
+            ty: "u8 / — / —",
+            default: Some("0, not a group"),
+            description: "Tree rows: indent under the nearest shallower row with ├─ └─ │ connectors; a ▾ group whose deeper rows fold away (collapsed() starts folded: ▸ and +N hidden).",
+        },
+        PropDoc {
+            name: ".columns([Column::new(w).min_width(n)])",
+            ty: "impl IntoIterator<Item = Column>",
+            default: Some("none"),
+            description: "Meta columns at the right, filled from SelectItem::meta([..]); each shows on rows at least min_width wide (herdr: agent from 36, state from 64). Long values end in …, missing ones say —.",
+        },
+        PropDoc {
+            name: "SelectItem::detail(s)",
+            ty: "impl Into<String>",
+            default: Some("none"),
+            description: "A line under the list while the row is selected; the row is reserved whenever any item has one, so the footer holds still.",
+        },
+        PropDoc {
+            name: ".toggle(i) / .set_collapsed(i, b) / .is_collapsed(i)",
+            ty: "usize, bool",
+            default: None,
+            description: "Fold or unfold a group from code (a click on its toggle); .tree_glyphs(TreeGlyphs::ascii()) swaps the connectors for |- `- |.",
+        },
+        PropDoc {
             name: ".key(key) -> Outcome",
             ty: "KeyInput",
             default: None,
@@ -280,12 +395,17 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
         ),
         ("/", "Open the search line (Search::OnDemand)"),
         ("typing, Backspace", "Edit the search text"),
+        (
+            "← →",
+            "Tree lists: fold the open group or go to the parent; unfold the folded group or go to its first row",
+        ),
     ],
     a11y: &[
         "The highlighted row is the theme's selection (reversed in mono and ANSI) and also carries the › cursor, so it reads without colour.",
         "Disabled rows say why in words (disabled: reason) and are never only dimmed.",
         "Rows out of view are announced: ▴/▾ marks and an N of M position; an empty filter says no match instead of drawing nothing.",
         "Every default glyph (› ▴ ▾) is East-Asian Narrow, so the gutter stays one cell on CJK terminals.",
+        "Open and folded groups differ by glyph (▾ / ▸, both Narrow), and a folded group says how many rows it hides (+3), so nothing disappears silently.",
     ],
     usage: USAGE,
     demos: &[
@@ -318,6 +438,16 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
             animated: false,
             interactive: true,
             make: no_match,
+        },
+        DemoDoc {
+            id: "navigator",
+            title: "Tree: machines, workspaces, panes",
+            description: "herdr's Go to: ←/→ fold and walk, ↑/↓ move, / searches (matches keep their parents). Agent and state columns appear by width; the selected row's detail sits under the list.",
+            cols: 84,
+            rows: 18,
+            animated: false,
+            interactive: true,
+            make: navigator,
         },
     ],
 };

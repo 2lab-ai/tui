@@ -1,3 +1,16 @@
+// Derived from herdrdev/herdr `src/client/shell/tabs.rs` (`render_tab_bar`,
+// `tab_drop_indicator_x`, `centered_tab_scroll`, `max_tab_scroll` and its test)
+// and `src/client/shell/mouse.rs` (`tab_drop_index_at`) at
+// ee5bfb5041bb3e4a49d591c72308aae3c81ecdde (Apache-2.0). Modified by 2lab: the
+// `<` `>` scroll buttons, the trailing action, the centred reveal and the drop
+// marker are opt-in parts of the llmux strip below, measured in cells over
+// its labels and dividers instead of herdr's fixed-width padded tabs; the
+// buttons say by weight (not colour) whether anything is hidden on their
+// side; the drop marker is a Narrow glyph clamped inside the area and also
+// shows for a drop index just past the visible window; the scroll position
+// is passed in and read back (`Reveal`, `TabsLayout::hidden_before`) instead
+// of living in shell state.
+
 //! A one-row tab strip: which view you are on, and how to get to the others.
 //!
 //! Ported from llmux `src/tui/ui.rs` (MIT, 2lab): `draw_tabs`, `TABS`,
@@ -14,6 +27,14 @@
 //! - when even the plain labels do not fit, the strip scrolls to keep the
 //!   active tab on screen and counts the hidden ones (`‹2 … 3›`) instead of
 //!   clipping them silently.
+//!
+//! Opt-in, from herdr's tab bar (`src/client/shell/tabs.rs`, Apache-2.0):
+//! clickable ` < ` ` > ` scroll buttons in place of the counts
+//! ([`Tabs::scroll_buttons`]), a trailing action such as ` + ` for a new tab
+//! ([`Tabs::action`]), centring the active tab when it is revealed
+//! ([`Reveal::Centre`]), and while a tab is dragged, a marker where it would
+//! drop ([`Tabs::drop_marker`]) with the drop index under the pointer
+//! ([`TabsLayout::drop_index`]).
 
 #[cfg(feature = "catalog")]
 pub(crate) mod docs;
@@ -21,7 +42,7 @@ pub(crate) mod docs;
 use std::borrow::Cow;
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
@@ -88,6 +109,45 @@ pub fn hit_test(hits: &[TabHit], col: u16, row: u16) -> Option<usize> {
     hits.iter().find(|h| h.contains(col, row)).map(|h| h.index)
 }
 
+/// The marker drawn where a dragged tab would drop. U+2590 is East-Asian
+/// Narrow, so it stays one cell on a CJK terminal, and it differs from the
+/// `│` divider by shape as well as colour.
+pub const DROP_MARKER: &str = "▐";
+
+/// Cells of one scroll button (` < ` / ` > `).
+const BUTTON: usize = 3;
+
+/// The narrowest a tab may get before the buttons or the action give way
+/// (herdr's `MIN_TAB_WIDTH`).
+const MIN_TAB: usize = 8;
+
+/// Which tab the strip starts at when the labels overflow the row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Reveal {
+    /// As far left as keeps the active tab on screen (llmux's strip).
+    #[default]
+    Edge,
+    /// The active tab as near the middle as the window allows — herdr's
+    /// reveal after a tab switch.
+    Centre,
+    /// This tab first: the host's scroll position after a click on a scroll
+    /// button. Clamped so the strip never scrolls past its last tab; the
+    /// active tab may then be off screen.
+    From(usize),
+}
+
+/// What a click on the strip lands on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabTarget {
+    Tab(usize),
+    /// The ` < ` button: show earlier tabs.
+    ScrollLeft,
+    /// The ` > ` button: show later tabs.
+    ScrollRight,
+    /// The trailing action (` + `).
+    Action,
+}
+
 /// Where everything went in one render.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TabsLayout {
@@ -95,13 +155,79 @@ pub struct TabsLayout {
     pub hits: Vec<TabHit>,
     /// The `[k] ` prefixes are shown.
     pub hinted: bool,
-    /// Tabs scrolled off the left and right ends (`‹N` / `N›`).
+    /// Tabs scrolled off the left and right ends (`‹N` / `N›`). The first
+    /// drawn tab is `hidden_before`: keep it and pass it back as
+    /// [`Reveal::From`] to hold the scroll position.
     pub hidden_before: usize,
     pub hidden_after: usize,
     /// Cells left free at the right end of the row after the labels.
     pub room: usize,
     /// The tail was drawn.
     pub tail: bool,
+    /// Every tab, drawn or not.
+    pub total: usize,
+    /// The largest useful first tab: past it the strip would only show
+    /// fewer tabs (herdr's `max_tab_scroll`).
+    pub max_start: usize,
+    /// The ` < ` and ` > ` buttons, when [`Tabs::scroll_buttons`] is on and
+    /// the labels overflow.
+    pub scroll_left: Option<Rect>,
+    pub scroll_right: Option<Rect>,
+    /// The trailing action, when set and there is room for it.
+    pub action: Option<Rect>,
+    /// The column of the drop marker, when one was asked for.
+    pub drop_marker: Option<u16>,
+}
+
+impl TabsLayout {
+    /// What a click at `(col, row)` lands on: a tab, a scroll button or the
+    /// action.
+    pub fn target_at(&self, col: u16, row: u16) -> Option<TabTarget> {
+        let p = Position::new(col, row);
+        if let Some(i) = hit_test(&self.hits, col, row) {
+            return Some(TabTarget::Tab(i));
+        }
+        [
+            (self.scroll_left, TabTarget::ScrollLeft),
+            (self.scroll_right, TabTarget::ScrollRight),
+            (self.action, TabTarget::Action),
+        ]
+        .into_iter()
+        .find(|(r, _)| r.is_some_and(|r| r.contains(p)))
+        .map(|(_, t)| t)
+    }
+
+    /// Where a tab dragged to `(col, row)` would be inserted: `0..=total`,
+    /// by the midpoint of the label under the pointer. `None` off the tab
+    /// row or when no tab is drawn. Port of herdr's `tab_drop_index_at`.
+    pub fn drop_index(&self, col: u16, row: u16) -> Option<usize> {
+        let (first, last) = (self.hits.first()?, self.hits.last()?);
+        if row != first.rect.y {
+            return None;
+        }
+        let p = Position::new(col, row);
+        if self.scroll_left.is_some_and(|r| r.contains(p)) {
+            return Some(0);
+        }
+        if self.scroll_right.is_some_and(|r| r.contains(p)) {
+            return Some(self.total);
+        }
+        if col <= first.rect.x {
+            return Some(first.index);
+        }
+        if col >= last.rect.right() {
+            return Some(last.index + 1);
+        }
+        for h in &self.hits {
+            if col < h.rect.x + h.rect.width / 2 {
+                return Some(h.index);
+            }
+            if col < h.rect.right() {
+                return Some(h.index + 1);
+            }
+        }
+        Some(last.index + 1)
+    }
 }
 
 /// One label as drawn: an optional `[k] ` prefix, and the byte range of an
@@ -128,6 +254,10 @@ pub struct Tabs<'a> {
     divider: Cow<'a, str>,
     indent: u16,
     tail: Vec<Span<'a>>,
+    reveal: Reveal,
+    buttons: bool,
+    action: Option<Cow<'a, str>>,
+    drop: Option<usize>,
 }
 
 impl<'a> Tabs<'a> {
@@ -140,7 +270,43 @@ impl<'a> Tabs<'a> {
             divider: Cow::Borrowed(" │ "),
             indent: 1,
             tail: Vec::new(),
+            reveal: Reveal::Edge,
+            buttons: false,
+            action: None,
+            drop: None,
         }
+    }
+
+    /// Which tab the strip starts at when the labels overflow. Default
+    /// [`Reveal::Edge`].
+    pub fn reveal(mut self, reveal: Reveal) -> Tabs<'a> {
+        self.reveal = reveal;
+        self
+    }
+
+    /// When the labels overflow, clickable ` < ` and ` > ` buttons at the
+    /// ends of the row instead of the `‹N` / `N›` counts. A button is dim
+    /// when nothing is hidden on its side. Below 14 cells (plus the action)
+    /// the counts come back. Default off.
+    pub fn scroll_buttons(mut self, on: bool) -> Tabs<'a> {
+        self.buttons = on;
+        self
+    }
+
+    /// A trailing action with its own hit rect, drawn ` label ` after the
+    /// last tab (at the right end when the labels overflow): `"+"` for a new
+    /// tab. Given way when there is no room beside an 8-cell tab.
+    pub fn action(mut self, label: impl Into<Cow<'a, str>>) -> Tabs<'a> {
+        self.action = Some(label.into());
+        self
+    }
+
+    /// While a tab is dragged: draw [`DROP_MARKER`] where it would be
+    /// inserted (`0..=len`, from [`TabsLayout::drop_index`]). An index
+    /// outside the visible window marks the nearer end.
+    pub fn drop_marker(mut self, index: Option<usize>) -> Tabs<'a> {
+        self.drop = index;
+        self
     }
 
     /// Index of the view you are on (clamped to the tabs given).
@@ -311,10 +477,20 @@ impl<'a> Tabs<'a> {
         text::truncate_line(Line::from(spans), max).spans
     }
 
-    /// Which form fits at `avail` cells after `indent`.
-    fn fit(&self, avail: usize, indent: usize) -> Fit {
+    /// Cells the action takes (` + `), or 0 without one.
+    fn action_width(&self) -> usize {
+        self.action.as_deref().map_or(0, |a| text::width(a) + 2)
+    }
+
+    /// Which form fits in `width` cells with `indent` before the labels.
+    fn fit(&self, width: usize, indent: usize) -> Fit {
         let n = self.tabs.len();
         let div = text::width(&self.divider);
+        let action_w = self.action_width();
+        // The action keeps room for itself and an 8-cell tab beside it.
+        let action = action_w > 0 && width >= indent + action_w + MIN_TAB;
+        let action_w = if action { action_w } else { 0 };
+        let avail = width - action_w;
         let strip = |full: bool| {
             indent + (0..n).map(|i| self.piece(i, full).width()).sum::<usize>() + div * (n - 1)
         };
@@ -324,6 +500,9 @@ impl<'a> Tabs<'a> {
             start: 0,
             end: n,
             markers: false,
+            buttons: false,
+            action,
+            max_start: 0,
         };
         if has_prefix && strip(true) <= avail {
             return whole(true);
@@ -331,53 +510,85 @@ impl<'a> Tabs<'a> {
         if strip(false) <= avail {
             return whole(false);
         }
-        // Scroll: a window of plain labels around the active tab, with the
-        // hidden tabs counted at each end.
+        // Scroll: a window of plain labels, with the hidden tabs counted at
+        // each end — or, with buttons, ` < ` and ` > ` at the ends of the row.
+        let buttons = self.buttons && width >= MIN_TAB + 2 * BUTTON + action_w;
+        let (lead, avail) = if buttons {
+            (0, width - 2 * BUTTON - action_w)
+        } else {
+            (indent, avail)
+        };
         let w: Vec<usize> = (0..n).map(|i| self.piece(i, false).width()).collect();
-        let cost = |s: usize, e: usize| {
-            let before = if s > 0 {
+        let before = |s: usize| {
+            if !buttons && s > 0 {
                 text::width(&marker_before(s))
             } else {
                 0
-            };
-            let after = if e < n {
+            }
+        };
+        let cost = |s: usize, e: usize| {
+            let after = if !buttons && e < n {
                 text::width(&marker_after(n - e))
             } else {
                 0
             };
-            indent + before + w[s..e].iter().sum::<usize>() + div * (e - s - 1) + after
+            lead + before(s) + w[s..e].iter().sum::<usize>() + div * (e - s - 1) + after
         };
+        let fits = |s: usize, e: usize| cost(s, e) <= avail;
+        let max_start = max_start_by(n, cost, avail);
         let at = self.active_index();
-        match (0..=at).find(|&s| cost(s, at + 1) <= avail) {
-            Some(start) => Fit {
-                hinted: false,
+        let edge = (0..=at).find(|&s| fits(s, at + 1));
+        let start = match self.reveal {
+            Reveal::Edge => edge,
+            // herdr's `centered_tab_scroll`: the start that puts the middle
+            // of the active label nearest the middle of the room (the later
+            // start on a tie), never past the largest useful start.
+            Reveal::Centre => (0..=at)
+                .rev()
+                .filter(|&s| fits(s, at + 1))
+                .min_by_key(|&s| {
+                    let left = lead + before(s) + w[s..at].iter().sum::<usize>() + div * (at - s);
+                    (2 * left + w[at]).abs_diff(avail)
+                })
+                .map(|s| s.min(max_start))
+                .or(edge),
+            Reveal::From(first) => Some(first.min(max_start)),
+        };
+        let fit = |start: usize, end: usize, markers: bool| Fit {
+            hinted: false,
+            start,
+            end,
+            markers,
+            buttons,
+            action,
+            max_start,
+        };
+        match start {
+            Some(start) if fits(start, start + 1) => fit(
                 start,
-                end: (at + 1..=n)
-                    .filter(|&e| cost(start, e) <= avail)
+                (start + 1..=n)
+                    .filter(|&e| fits(start, e))
                     .max()
-                    .unwrap_or(at + 1),
-                markers: true,
-            },
-            // Not even the active label with its counts fits: the label
-            // alone, clipped with `…` (the counts stay in the layout).
-            None => Fit {
-                hinted: false,
-                start: at,
-                end: at + 1,
-                markers: false,
-            },
+                    .unwrap_or(start + 1),
+                !buttons,
+            ),
+            // Not even one label with its counts fits: that label alone,
+            // clipped with `…` (the counts stay in the layout).
+            Some(start) => fit(start, start + 1, false),
+            None => fit(at, at + 1, false),
         }
     }
 
     fn place(&self, area: Rect, mut buf: Option<&mut Buffer>) -> TabsLayout {
+        let n = self.tabs.len();
         let mut out = TabsLayout {
             room: area.width as usize,
+            total: n,
             ..TabsLayout::default()
         };
         if area.is_empty() {
             return out;
         }
-        let n = self.tabs.len();
         let y = area.y;
         let right = area.right();
         // The indent gives way before the labels do.
@@ -388,28 +599,61 @@ impl<'a> Tabs<'a> {
         };
         let mut x = area.x + indent;
         let t = &self.theme;
-        let put = |x: &mut u16, spans: &[Span<'static>], buf: &mut Option<&mut Buffer>| {
-            for s in spans {
-                let w = (text::width(&s.content) as u16).min(right - *x);
-                if let Some(b) = buf.as_deref_mut() {
-                    b.set_span(*x, y, s, w);
+        let put =
+            |x: &mut u16, limit: u16, spans: &[Span<'static>], buf: &mut Option<&mut Buffer>| {
+                for s in spans {
+                    let w = (text::width(&s.content) as u16).min(limit.saturating_sub(*x));
+                    if let Some(b) = buf.as_deref_mut() {
+                        b.set_span(*x, y, s, w);
+                    }
+                    *x += w;
                 }
-                *x += w;
-            }
-        };
+            };
         if n > 0 {
             let Fit {
                 hinted: full,
                 start,
                 end,
                 markers,
+                buttons,
+                action,
+                max_start,
             } = self.fit(area.width as usize, indent as usize);
             out.hinted = full;
             out.hidden_before = start;
             out.hidden_after = n - end;
+            out.max_start = max_start;
+            let action_w = if action {
+                self.action_width() as u16
+            } else {
+                0
+            };
+            // Labels (and counts) end here.
+            let mut limit = right - action_w;
+            if buttons {
+                let left = Rect::new(area.x, y, BUTTON as u16, 1);
+                let right_b = Rect::new(limit - BUTTON as u16, y, BUTTON as u16, 1);
+                for (rect, glyph, live) in [(left, " < ", start > 0), (right_b, " > ", end < n)] {
+                    // Live says something is hidden on that side; dim says
+                    // nothing is — by weight, so mono tells them apart.
+                    let style = if live {
+                        t.secondary().add_modifier(Modifier::BOLD)
+                    } else {
+                        t.dim()
+                    };
+                    if let Some(b) = buf.as_deref_mut() {
+                        b.set_stringn(rect.x, y, glyph, BUTTON, style);
+                    }
+                }
+                out.scroll_left = Some(left);
+                out.scroll_right = Some(right_b);
+                x = left.right();
+                limit = right_b.x;
+            }
             if markers && start > 0 {
                 put(
                     &mut x,
+                    limit,
                     &[Span::styled(marker_before(start), t.dim())],
                     &mut buf,
                 );
@@ -420,11 +664,12 @@ impl<'a> Tabs<'a> {
                 if i > start {
                     put(
                         &mut x,
+                        limit,
                         &[Span::styled(self.divider.to_string(), t.dim())],
                         &mut buf,
                     );
                 }
-                let max = (right - x) as usize;
+                let max = limit.saturating_sub(x) as usize;
                 let max = if i + 1 == end {
                     max.saturating_sub(reserve).max(1).min(max)
                 } else {
@@ -432,7 +677,7 @@ impl<'a> Tabs<'a> {
                 };
                 let spans = self.piece_spans(i, full, max);
                 let x0 = x;
-                put(&mut x, &spans, &mut buf);
+                put(&mut x, limit, &spans, &mut buf);
                 if x > x0 {
                     out.hits.push(TabHit {
                         rect: Rect::new(x0, y, x - x0, 1),
@@ -441,7 +686,38 @@ impl<'a> Tabs<'a> {
                 }
             }
             if let Some(m) = after {
-                put(&mut x, &[Span::styled(m, t.dim())], &mut buf);
+                put(&mut x, limit, &[Span::styled(m, t.dim())], &mut buf);
+            }
+            if buttons {
+                x = right - action_w;
+            }
+            if action && let Some(label) = self.action.as_deref() {
+                let rect = Rect::new(x, y, action_w.min(right - x), 1);
+                if let Some(b) = buf.as_deref_mut() {
+                    b.set_stringn(
+                        rect.x,
+                        y,
+                        format!(" {label} "),
+                        rect.width as usize,
+                        t.secondary(),
+                    );
+                }
+                if !rect.is_empty() {
+                    out.action = Some(rect);
+                }
+                x = rect.right();
+            }
+            if let Some(d) = self.drop {
+                out.drop_marker = self.drop_x(d, &out.hits, area);
+                if let (Some(mx), Some(b)) = (out.drop_marker, buf.as_deref_mut()) {
+                    b.set_stringn(
+                        mx,
+                        y,
+                        DROP_MARKER,
+                        1,
+                        t.accent().add_modifier(Modifier::BOLD),
+                    );
+                }
             }
         }
         out.room = (right - x) as usize;
@@ -459,15 +735,49 @@ impl<'a> Tabs<'a> {
         }
         out
     }
+
+    /// The column of the drop marker for insert index `d`: on the divider
+    /// before tab `d`, or just outside the first or last drawn label (herdr's
+    /// `tab_drop_indicator_x`). Always inside `area`.
+    fn drop_x(&self, d: usize, hits: &[TabHit], area: Rect) -> Option<u16> {
+        let (first, last) = (hits.first()?, hits.last()?);
+        let x = if d <= first.index {
+            first.rect.x.saturating_sub(1)
+        } else if d > last.index {
+            last.rect.right()
+        } else {
+            let div = text::width(&self.divider) as u16;
+            hits.iter()
+                .find(|h| h.index == d)
+                .map_or(last.rect.right(), |h| {
+                    h.rect.x.saturating_sub(div.div_ceil(2).max(1))
+                })
+        };
+        Some(x.clamp(area.x, area.right() - 1))
+    }
 }
 
 /// The form [`Tabs::fit`] picked: hints or not, the window of tabs shown,
-/// and whether the hidden counts are drawn.
+/// whether the hidden counts or the scroll buttons are drawn, and whether
+/// the action has room.
 struct Fit {
     hinted: bool,
     start: usize,
     end: usize,
     markers: bool,
+    buttons: bool,
+    action: bool,
+    max_start: usize,
+}
+
+/// The largest useful first tab of `n`: the start of the longest run that
+/// shows through the last tab, or the last tab alone when even it does not
+/// fit (it must stay reachable). Port of herdr's `max_tab_scroll` over any
+/// cost of a window `[s, e)`.
+fn max_start_by(n: usize, cost: impl Fn(usize, usize) -> usize, avail: usize) -> usize {
+    (0..n)
+        .find(|&s| cost(s, n) <= avail)
+        .unwrap_or(n.saturating_sub(1))
 }
 
 fn marker_before(hidden: usize) -> String {
@@ -778,5 +1088,230 @@ mod tests {
         let x = layout.hits[1].rect.x;
         assert!(buf[(x, 1)].modifier.contains(Modifier::REVERSED));
         assert!(!buf[(1, 1)].modifier.contains(Modifier::REVERSED));
+    }
+
+    /// herdr's workspace tabs: more than a narrow row holds.
+    fn herdr_tabs() -> Vec<Tab<'static>> {
+        [
+            "main", "claude", "codex", "logs", "review", "deploy", "notes", "db",
+        ]
+        .map(Tab::new)
+        .to_vec()
+    }
+
+    fn strip(active: usize) -> Tabs<'static> {
+        Tabs::new(herdr_tabs())
+            .active(active)
+            .scroll_buttons(true)
+            .action("+")
+            .theme(Theme::ansi())
+    }
+
+    // Upstream: tabs.rs `trailing_scroll_limit_accounts_for_full_widths_and_separators`.
+    #[test]
+    fn trailing_scroll_limit_accounts_for_full_widths_and_separators() {
+        for (widths, available, expected) in [
+            (&[][..], 0, 0),
+            (&[8, 13][..], 0, 1),
+            (&[8, 13][..], 1, 1),
+            (&[8, 13][..], 12, 1),
+            (&[8, 13][..], 21, 1),
+            (&[8, 13][..], 22, 0),
+            (&[8, 13][..], 30, 0),
+            (&[8, u16::MAX as usize][..], u16::MAX as usize, 1),
+        ] {
+            let cost = |s: usize, e: usize| widths[s..e].iter().sum::<usize>() + (e - s - 1);
+            assert_eq!(
+                max_start_by(widths.len(), cost, available),
+                expected,
+                "widths={widths:?}, available={available}"
+            );
+        }
+    }
+
+    #[test]
+    fn scroll_buttons_and_action_sit_at_the_ends_with_their_own_rects() {
+        let tabs = strip(0);
+        let (buf, layout) = render(&tabs, 40);
+        // 40 − 2 buttons − the action leaves 31 cells: four labels fit.
+        assert_eq!(
+            snapshot::lines(&buf)[1],
+            " < main │ claude │ codex │ logs    >  +"
+        );
+        assert_eq!(layout.scroll_left, Some(Rect::new(0, 1, 3, 1)));
+        assert_eq!(layout.scroll_right, Some(Rect::new(34, 1, 3, 1)));
+        assert_eq!(layout.action, Some(Rect::new(37, 1, 3, 1)));
+        assert_eq!((layout.hidden_before, layout.hidden_after), (0, 4));
+        assert_eq!(layout.hits[0].rect, Rect::new(3, 1, 4, 1));
+        assert_eq!(layout.target_at(1, 1), Some(TabTarget::ScrollLeft));
+        assert_eq!(layout.target_at(36, 1), Some(TabTarget::ScrollRight));
+        assert_eq!(layout.target_at(38, 1), Some(TabTarget::Action));
+        assert_eq!(layout.target_at(4, 1), Some(TabTarget::Tab(0)));
+        assert_eq!(layout.target_at(32, 1), None, "the gap before >");
+        assert_eq!(layout.target_at(38, 0), None);
+        // Nothing hidden to the left: ` < ` is dim; ` > ` is live (bold).
+        assert_eq!(buf[(1, 1)].fg, Theme::ansi().muted);
+        assert!(!buf[(1, 1)].modifier.contains(Modifier::BOLD));
+        assert!(buf[(35, 1)].modifier.contains(Modifier::BOLD));
+        // Mono tells them apart by weight alone.
+        let (buf, _) = render(&strip(0).theme(Theme::mono()), 40);
+        assert!(buf[(1, 1)].modifier.contains(Modifier::DIM));
+        assert!(buf[(35, 1)].modifier.contains(Modifier::BOLD));
+        // No counts while the buttons are there.
+        assert!(!snapshot::lines(&buf)[1].contains('›'));
+    }
+
+    #[test]
+    fn buttons_hold_their_columns_while_the_strip_scrolls() {
+        let mut first = 0;
+        let mut seen = Vec::new();
+        loop {
+            let tabs = strip(0).reveal(Reveal::From(first));
+            let (buf, layout) = render(&tabs, 40);
+            assert_eq!(layout.scroll_right, Some(Rect::new(34, 1, 3, 1)));
+            assert_eq!(layout.hits[0].index, layout.hidden_before);
+            seen.push(layout.hidden_before);
+            // Live on the left once anything is hidden there.
+            assert_eq!(
+                buf[(1, 1)].modifier.contains(Modifier::BOLD),
+                layout.hidden_before > 0
+            );
+            if layout.hidden_before == layout.max_start {
+                // At the end: everything through `db` is drawn, `>` is dim.
+                assert_eq!(layout.hidden_after, 0);
+                assert_eq!(buf[(35, 1)].fg, Theme::ansi().muted);
+                break;
+            }
+            first = layout.hidden_before + 1;
+        }
+        assert_eq!(seen, vec![0, 1, 2, 3, 4]);
+        // Past the end is clamped to the last useful start.
+        let (_, layout) = render(&strip(0).reveal(Reveal::From(99)), 40);
+        assert_eq!(layout.hidden_before, layout.max_start);
+    }
+
+    #[test]
+    fn centre_reveal_puts_the_active_tab_mid_strip() {
+        let (_, edge) = render(&strip(5), 40);
+        let (_, centre) = render(&strip(5).reveal(Reveal::Centre), 40);
+        let mid = |l: &TabsLayout| {
+            let h = l.hits.iter().find(|h| h.index == 5).expect("active drawn");
+            h.rect.x + h.rect.width / 2
+        };
+        // Edge leaves the active tab at the right end; centre near 20.
+        assert!(mid(&edge) > 25, "{edge:?}");
+        assert!(mid(&centre).abs_diff(20) <= 6, "{centre:?}");
+        // Near the end, centring is clamped to the last useful start.
+        let (_, last) = render(&strip(7).reveal(Reveal::Centre), 40);
+        assert_eq!(last.hidden_before, last.max_start);
+        assert_eq!(last.hidden_after, 0);
+        // The llmux counter strip centres too.
+        let tabs = Tabs::new(llmux_tabs(false, false))
+            .active(5)
+            .reveal(Reveal::Centre)
+            .theme(Theme::ansi());
+        let (buf, layout) = render(&tabs, 40);
+        let row = &snapshot::lines(&buf)[1];
+        assert!(layout.hidden_before > 0 && layout.hidden_after > 0, "{row}");
+        assert!(row.contains('‹') && row.ends_with('›'), "{row}");
+    }
+
+    #[test]
+    fn action_follows_the_last_tab_when_everything_fits() {
+        let tabs = Tabs::new(["main", "claude"].map(Tab::new))
+            .action("+")
+            .theme(Theme::ansi());
+        let (buf, layout) = render(&tabs, 40);
+        assert_eq!(snapshot::lines(&buf)[1], " main │ claude +");
+        assert_eq!(layout.action, Some(Rect::new(14, 1, 3, 1)));
+        assert_eq!(layout.target_at(15, 1), Some(TabTarget::Action));
+        assert_eq!(layout.scroll_left, None);
+        // Buttons are only for overflow.
+        let (_, layout) = render(&tabs.clone().scroll_buttons(true), 40);
+        assert_eq!((layout.scroll_left, layout.scroll_right), (None, None));
+        // Too narrow for the action beside an 8-cell tab: it gives way.
+        let (_, layout) = render(&tabs, 10);
+        assert_eq!(layout.action, None);
+    }
+
+    // Port of the cases herdr's `tab_drop_index_at` handles: buttons, the
+    // ends of the drawn labels, label midpoints, the dividers between them.
+    #[test]
+    fn drop_index_splits_each_label_at_its_midpoint() {
+        let (_, layout) = render(&strip(0).reveal(Reveal::From(2)), 40);
+        // " < codex │ logs │ review │ deploy    >  +"
+        let at = |c| layout.drop_index(c, 1);
+        let codex = layout.hits[0].rect;
+        assert_eq!(layout.hits[0].index, 2);
+        assert_eq!(at(1), Some(0), "on < : the very start");
+        assert_eq!(at(35), Some(8), "on > : the very end");
+        assert_eq!(at(codex.x), Some(2), "first cell of the first label");
+        assert_eq!(at(codex.x + 1), Some(2), "left half");
+        assert_eq!(at(codex.x + 3), Some(3), "right half");
+        assert_eq!(at(codex.right() + 1), Some(3), "the divider after codex");
+        let logs = layout.hits[1].rect;
+        assert_eq!(at(logs.x + 1), Some(3));
+        assert_eq!(at(logs.x + 2), Some(4));
+        let last = layout.hits.last().expect("drawn");
+        assert_eq!(
+            at(last.rect.right()),
+            Some(last.index + 1),
+            "past the last label"
+        );
+        assert_eq!(layout.drop_index(10, 0), None, "off the row");
+        assert_eq!(TabsLayout::default().drop_index(0, 0), None);
+    }
+
+    #[test]
+    fn drop_marker_sits_on_the_divider_and_stays_inside() {
+        let tabs = Tabs::new(["main", "claude", "codex"].map(Tab::new)).theme(Theme::mono());
+        for (index, row, x) in [
+            (0, "▐main │ claude │ codex", 0),
+            (1, " main ▐ claude │ codex", 6),
+            (2, " main │ claude ▐ codex", 15),
+            (3, " main │ claude │ codex▐", 22),
+            (9, " main │ claude │ codex▐", 22),
+        ] {
+            let (buf, layout) = render(&tabs.clone().drop_marker(Some(index)), 40);
+            assert_eq!(layout.drop_marker, Some(x), "{index}");
+            assert_eq!(snapshot::lines(&buf)[1], row, "{index}");
+            // Shape and weight, not colour: mono keeps it apart from `│`.
+            assert!(buf[(x, 1)].modifier.contains(Modifier::BOLD));
+        }
+        assert_eq!(unicode_width::UnicodeWidthStr::width_cjk(DROP_MARKER), 1);
+        // A full row: the marker after the last label is clamped inside.
+        let (_, layout) = render(&tabs.clone().drop_marker(Some(3)), 22);
+        assert_eq!(layout.drop_marker, Some(21));
+    }
+
+    /// herdr H1: rects must never leave the area, at any width.
+    #[test]
+    fn every_rect_stays_inside_the_row_at_every_width() {
+        for active in [0, 4, 7] {
+            for reveal in [Reveal::Edge, Reveal::Centre, Reveal::From(3)] {
+                for w in 1..=70u16 {
+                    let tabs = strip(active).reveal(reveal).drop_marker(Some(active + 1));
+                    let (_, layout) = render(&tabs, w);
+                    let row = Rect::new(0, 1, w, 1);
+                    let rects = layout
+                        .hits
+                        .iter()
+                        .map(|h| h.rect)
+                        .chain(layout.scroll_left)
+                        .chain(layout.scroll_right)
+                        .chain(layout.action);
+                    for r in rects {
+                        assert_eq!(r.intersection(row), r, "w={w} {layout:?}");
+                    }
+                    if let Some(x) = layout.drop_marker {
+                        assert!(x < w, "w={w}");
+                    }
+                    assert!(
+                        layout.hidden_before + layout.hits.len() + layout.hidden_after
+                            <= layout.total
+                    );
+                }
+            }
+        }
     }
 }

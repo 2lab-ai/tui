@@ -1,6 +1,6 @@
 # Research: what a terminal widget library for agent apps needs
 
-ratatui gives you the cells, the layout and 17 basic widgets, but none of the widgets an agent or a quota dashboard needs. twolab-tui fills that gap with widgets taken from three working apps — llmux, OpenAI Codex and Vercel fx — under one theme, one motion setting and one width rule.
+ratatui gives you the cells, the layout and 17 basic widgets, but none of the widgets an agent or a quota dashboard needs. twolab-tui fills that gap with widgets taken from four working apps — llmux, OpenAI Codex, Vercel fx and herdr — under one theme, one motion setting and one width rule.
 
 This report covers:
 
@@ -14,15 +14,15 @@ This report covers:
 8. [What we took, and from where](#what-we-took-and-from-where)
 9. [What we left out, and why](#what-we-left-out-and-why)
 
-Read sections 1 and 5 if you only want the decisions. Read section 4 before you port another widget. Every claim names its source; the research was done on 5 November 2026 against llmux `524b6e4`, Codex `e7f32cf1` and fx `412d841d`.
+Read sections 1 and 5 if you only want the decisions. Read section 4 before you port another widget. Every claim names its source; the research was done on 5 November 2026 against llmux `524b6e4`, Codex `e7f32cf1` and fx `412d841d`, and on 6 November 2026 against herdr `ee5bfb5`.
 
 ## The short answer
 
 - Five ecosystems (ratatui and its community crates, Charm, Textual, Ink, OpenTUI) agree on a standard set: panel, text, selectable list, select, table, progress bar, spinner, text input, text area, scroll view, tabs, tree and a key-hint footer.
 - ratatui 0.30 ships 17 primitives but no spinner, shimmer, key hints, toast, command palette, text input, scroll view, diff, markdown, status bar or modal. Community crates exist for most of these, but they are small, young, and share no theme, motion or focus model.
-- The three apps we studied had already solved most of these, each in its own way. llmux had quota meters, spinners and tabs; Codex had shimmer, key hints, pickers and a pager; fx had the approval band, the question form, the diff view and the composer.
+- The four apps we studied had already solved most of these, each in its own way. llmux had quota meters, spinners and tabs; Codex had shimmer, key hints, pickers and a pager; fx had the approval band, the question form, the diff view and the composer; herdr had the modal, toasts, an agent list and a draggable scrollbar.
 - The library's value is the shared rules, not any one widget: time is an input, colour comes from a theme, width is measured in cells, motion can be turned off, and nothing is cut without saying so.
-- The catalog compiles the crate itself to WebAssembly (about 750 KB, 280 KB compressed, for 27 widgets and 85 demos, no imports) and paints each demo's cells in the page. What you see on the site is the Rust code, not a recording.
+- The catalog compiles the crate itself to WebAssembly (about 960 KB, 360 KB gzipped, for 31 widgets and 112 demos, no imports) and paints each demo's cells in the page. What you see on the site is the Rust code, not a recording.
 - The crate is Apache-2.0, because the Codex and fx code it carries can only be offered under Apache terms.
 
 ## What terminal UI libraries already offer
@@ -124,6 +124,48 @@ The terminal emulator and the diff are not worth porting; ratatui already does b
 
 fx's browser demo compiles the whole CLI to WASI and points xterm.js at its output. That needs a WASI shim and JavaScript Promise Integration, so it only runs in recent Chrome and Edge. The catalog uses a lighter model (section 6).
 
+### herdr
+
+herdr (<https://github.com/herdrdev/herdr>, Apache-2.0) is a terminal workspace for coding agents: panes, tabs, a sidebar
+of agents and their state, toasts, and overlays, on ratatui 0.30 and crossterm 0.29. We read it at `ee5bfb5` on
+6 November 2026 — every file under `src/ui/` and the drawing half of `src/client/shell/`.
+
+herdr paints its whole shell straight into the buffer through a few `put_text` helpers and a 20-colour palette. There is
+no `impl Widget` in its UI code, so nothing could be copied as it is; the value is in the patterns and their maths:
+
+- A modal frame sized in cells or per cent and clamped to the screen, with a header, a scrolling body, a footer and a
+  button row whose rectangles the input code can test.
+- Toasts: a card anchored to a corner (a one-row banner on a narrow screen), stacked so that cards do not overlap, from a
+  capped queue where each kind has its own lifetime.
+- An agent list: one block per agent with its state, ordered blocked, done, working, idle; a collapsed rail; a one-line
+  tally for narrow screens.
+- A scrollbar whose thumb can be clicked and dragged, with the maths for lists whose rows differ in height.
+- Smaller features for widgets the library already had: a single-line field that scrolls with its caret and a kill-and-yank
+  buffer (composer), width shared fairly between segments before any is dropped (status bar), tree rows (select list),
+  drag selection that stays put while the view scrolls (pager), scroll buttons on an overflowing tab strip, a filter for
+  the key help, a selection colour taken from the terminal's own background, and a badge on menu items.
+
+What the health check found, and what the ports fix (each item was reproduced on a copy of herdr's own function, or read
+in the code where it says so):
+
+- A panic: with the copy toast at the top of a 4-row terminal, its rectangle leaves the buffer and clearing it indexes
+  outside (`src/ui/status.rs:37-47`). The toast here is always clamped inside its area, and a test pins herdr's input.
+- A second panic, in the parser for the terminal's background-colour reply, on non-ASCII input (`#aé`,
+  `src/terminal_theme.rs:146-155`). Whether a terminal can send that was not confirmed.
+- Wide text written one `char` per cell: the Korean label `작업중` shows as `작` (`shell/agent_sidebar.rs:376-382`).
+- Truncation by `char`: `🇰🇷 team` cut to two cells keeps half a flag (`src/ui/text.rs:7-34`). The library cuts by
+  grapheme, in cells.
+- `NO_COLOR` is ignored and true colour is always sent (read in the code). Working, blocked and done are the same `●` in
+  three colours. Every state here has its own glyph that stays one cell wide on CJK terminals, and the mono theme tells
+  them apart.
+- Rows and text dropped with no count. The ports say `+N more` or end with `…`.
+
+What we left out: copy-mode motions, link hover, the tab surface and pane resizing need herdr's terminal runtime and its
+server; shared pane borders are mostly ratatui 0.30's own `Block::merge_borders`.
+
+The full inventory (26 patterns, with file and line) and the twelve health-check findings are in
+[herdr audit](/tui/docs/herdr-audit) (source: [docs/research/herdr-inventory.md](https://github.com/2lab-ai/tui/blob/main/docs/research/herdr-inventory.md)).
+
 ## The rules every widget keeps
 
 These are enforced by the catalog's contract test, which renders every demo at several sizes (down to 1×1), several times, in four themes, with and without reduced motion.
@@ -177,7 +219,7 @@ The same review found a bug in ratatui 0.30 itself: its word wrapper can emit a 
 
 ## What we took, and from where
 
-27 widgets, each with at least three demos. The [sources and licences](/tui/docs/licences) page links each one to its upstream file.
+31 widgets, each with at least three demos. The [sources and licences](/tui/docs/licences) page links each one to its upstream file.
 
 | Group | Widget | From | What it tells the person |
 |---|---|---|---|
@@ -186,6 +228,8 @@ The same review found a bug in ratatui 0.30 itself: its word wrapper can emit a 
 | Agent | Status bar | fx | Mode, model, how full the context is, and what you just armed |
 | Agent | Approval card | fx | What the agent wants to do, how risky it is, and your options |
 | Agent | Banner and flash | llmux | Something is on until a deadline; whether the last action worked |
+| Agent | Toast | herdr | A message over the screen that says what kind it is and goes away on its own |
+| Agent | Agent list | herdr | Who is doing what, and who needs you first |
 | Data | Meter | llmux | How much of a quota window is used or left and when it resets |
 | Data | Mini bar | llmux | A row's share of the biggest one |
 | Data | Ledger amount | llmux | Money lined up on the decimal point |
@@ -205,6 +249,8 @@ The same review found a bug in ratatui 0.30 itself: its word wrapper can emit a 
 | Input | Menu | llmux | What you can do to this thing, where you clicked |
 | Primitives | Layout | Codex | Who gets the rows when there are not enough |
 | Primitives | Pager | Codex | The whole text, and where you are in it |
+| Primitives | Modal | herdr | Something needs an answer before you go on, in a box sized to what it says |
+| Primitives | Scrollbar | herdr | How much there is, where you are, and a thumb the mouse can drag |
 | Primitives | Rule | fx | Where a band or section starts |
 | Primitives | Spinner | llmux | That something is in progress, and which kind |
 | Primitives | Gradient text | llmux | That a name is special |
@@ -221,6 +267,15 @@ llmux now depends on the crate and dropped its own copies:
 - `NO_COLOR` keeps its weight: crossterm already dropped colour codes, but its empty colour sequence (`ESC[m`) is a full reset, so bold and reverse went with them (a live 80×30 frame kept 28 of 347 bold glyphs). The frame is now decoloured before output — 372 bold glyphs — and red text turns bold
 - copying from the raw viewer works inside tmux and GNU screen
 - the cooldown, pulse and filling-up spinners stay one cell wide on CJK terminals
+
+## What llmux plans next
+
+Every catalog entry was checked against llmux's dashboard (`eec32c9`), with 80×24 frames captured from a running
+daemon. The data cells already match the catalog; what people hit are prompts that forget what they ask about after
+5 seconds, a logs view that cannot scroll, popups sized by percentage, and status messages cut at 80 columns. The plan
+puts each entry in one of three batches — prompts; viewers and overlays; feedback and data — or says why it waits.
+The audit is the [llmux audit](/tui/docs/llmux-audit) page (source: [docs/research/llmux-audit.md](https://github.com/2lab-ai/tui/blob/main/docs/research/llmux-audit.md));
+the plan itself lives in llmux, in `docs/tui-catalog-plan.md`.
 
 ## What we left out, and why
 
@@ -240,6 +295,7 @@ llmux now depends on the crate and dropped its own copies:
 - OpenAI Codex TUI at `e7f32cf1`: <https://github.com/openai/codex/tree/e7f32cf1928a35a9232a633a51c2a03b5a7e2c72/codex-rs/tui>
 - Vercel fx at `412d841d`: <https://github.com/vercel-labs/fx/tree/412d841d73dd6e1b8de551022728d9c929caae17>
 - xfx, 2lab's Rust port of fx: <https://github.com/2lab-ai/xfx>
+- herdr at `ee5bfb5`: <https://github.com/herdrdev/herdr/tree/ee5bfb5041bb3e4a49d591c72308aae3c81ecdde>
 - llmux at `524b6e4`: <https://github.com/2lab-ai/llmux/tree/524b6e437fd9e67bf2d3fdd507267107291cb6ac/src/tui>
 - NO_COLOR: <https://no-color.org/>
 - Apache License 2.0: <https://www.apache.org/licenses/LICENSE-2.0>

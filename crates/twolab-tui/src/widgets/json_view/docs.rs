@@ -11,8 +11,10 @@ use crate::theme::Theme;
 
 const USAGE: &str = r#"use twolab_tui::json_view::{body_lines, JsonView, JsonViewState};
 
-// Once, when the body arrives (not per frame).
+// Once, when the body arrives (not per frame). One JsonViewState per body:
+// a new body gets a new state, or tells the old one.
 let lines = body_lines(&record.request_body, &theme);
+app.body_scroll.invalidate();
 
 // Every frame: wraps to the width, clamps the scroll, draws the position.
 frame.render_stateful_widget(
@@ -129,6 +131,12 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
             ty: "&[Line<'static>]",
             default: None,
             description: "The lines to show; render with a JsonViewState.",
+        },
+        PropDoc {
+            name: "state.invalidate() / state.set_generation(n)",
+            ty: "JsonViewState",
+            default: None,
+            description: "The lines changed: forget the wrapped row counts the state keeps per body and width. One state per body, or call one of these on every change.",
         },
         PropDoc {
             name: ".theme(t)",
