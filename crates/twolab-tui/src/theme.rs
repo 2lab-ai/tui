@@ -14,6 +14,8 @@
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
 
+use crate::color::{self, ColorLevel, Rgb};
+
 /// Whether widgets animate. `Reduced` keeps every animated widget on one
 /// still frame that still says the same thing (a spinner becomes its first
 /// glyph, a shimmer becomes plain bold text).
@@ -261,6 +263,29 @@ impl Theme {
         }
     }
 
+    /// A text selection (a drag in a pager, a preset in a field) drawn over
+    /// a terminal whose background is `host_bg` — from the host's OSC 11
+    /// query, [`color::parse_osc_color`]. The background moves 28 % toward
+    /// white on a dark terminal and toward black on a light one, the
+    /// foreground is black or white by contrast
+    /// ([`color::selection_colors`], herdr's selection colour), and every
+    /// modifier is cleared so the selection reads as one block over mixed
+    /// styles. At [`ColorLevel::Ansi256`] the pair is the nearest palette
+    /// colours. When the background is unknown, on 16 colours (whose hues
+    /// the user's theme decides) and in mono, it is reversed instead.
+    pub fn selection_on(&self, host_bg: Option<Rgb>, level: ColorLevel) -> Style {
+        match host_bg {
+            Some(bg) if !self.is_mono() && level != ColorLevel::Ansi16 => {
+                let (sel, fg) = color::selection_colors(bg);
+                Style::new()
+                    .bg(color::best_color(sel, level))
+                    .fg(color::best_color(fg, level))
+                    .remove_modifier(Modifier::all())
+            }
+            _ => Style::new().add_modifier(Modifier::REVERSED),
+        }
+    }
+
     pub fn level_color(&self, level: Level) -> Color {
         match level {
             Level::Ok => self.ok,
@@ -375,6 +400,63 @@ mod tests {
         assert!(buf[(1, 0)].modifier.contains(Modifier::BOLD));
         assert!(!buf[(0, 0)].modifier.contains(Modifier::BOLD));
         assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn a_selection_from_the_host_background_or_reversed() {
+        let dark = (26, 27, 38);
+        let want = Style::new()
+            .bg(Color::Rgb(90, 91, 99))
+            .fg(Color::Rgb(255, 255, 255))
+            .remove_modifier(Modifier::all());
+        for t in [Theme::ansi(), Theme::dark(), Theme::light()] {
+            assert_eq!(t.selection_on(Some(dark), ColorLevel::TrueColor), want);
+        }
+        let reversed = Style::new().add_modifier(Modifier::REVERSED);
+        assert_eq!(
+            Theme::ansi().selection_on(None, ColorLevel::TrueColor),
+            reversed,
+            "unknown background"
+        );
+        assert_eq!(
+            Theme::mono().selection_on(Some(dark), ColorLevel::TrueColor),
+            reversed,
+            "NO_COLOR"
+        );
+        assert_eq!(
+            Theme::dark().selection_on(Some(dark), ColorLevel::Ansi16),
+            reversed
+        );
+        let s = Theme::dark().selection_on(Some(dark), ColorLevel::Ansi256);
+        assert!(matches!(s.bg, Some(Color::Indexed(_))), "{s:?}");
+        assert!(matches!(s.fg, Some(Color::Indexed(_))), "{s:?}");
+    }
+
+    /// herdr `selection_highlight_uses_one_uniform_style`.
+    #[test]
+    fn a_selection_is_one_uniform_style_over_mixed_cells() {
+        use ratatui::layout::Rect;
+        let sel = Theme::dark().selection_on(Some((12, 14, 16)), ColorLevel::TrueColor);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 3, 1));
+        buf[(0, 0)].set_style(Style::new().fg(Color::Rgb(10, 220, 120)).bg(Color::Black));
+        buf[(1, 0)].set_style(
+            Style::new()
+                .fg(Color::Rgb(220, 180, 40))
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
+        buf[(2, 0)].set_style(Style::new().fg(Color::Blue).bg(Color::Reset));
+        buf.set_style(buf.area, sel);
+        let first = buf[(0, 0)].style();
+        for x in 0..3 {
+            let s = buf[(x, 0)].style();
+            assert_eq!(
+                (s.fg, s.bg, s.add_modifier),
+                (first.fg, first.bg, first.add_modifier)
+            );
+        }
+        assert_eq!(first.bg, sel.bg);
+        assert!(!buf[(1, 0)].modifier.contains(Modifier::BOLD));
     }
 
     #[test]

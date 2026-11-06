@@ -10,6 +10,17 @@
 // Zig to Rust and re-expressed as ratatui text; rules checked against 2lab's
 // xfx `src/tui/wrap.rs` (`composer`, `composer_point`) and
 // `src/tui/editor.rs` (Apache-2.0) at 93f516b. Modified by 2lab.
+//
+// Derived from herdrdev/herdr `src/client/shell/text_editor.rs`
+// (`TextEditor::insert`, `remove`, `handle_key`, `viewport`) at
+// ee5bfb5041bb3e4a49d591c72308aae3c81ecdde (Apache-2.0): the single-line
+// field, the kill buffer and Ctrl+Y yank, `replace_on_type`, the readline
+// keys Ctrl+B/F/D/H and Alt+B/F/D, and the horizontal window that keeps the
+// caret in view. Modified by 2lab: the window moves only as far as it must
+// and says what it hides (`‹` in the prompt column, `›` at the right edge)
+// instead of clipping silently; a preset is drawn as a selection; words stay
+// whitespace-separated as in the rest of the composer; a masked mode that
+// never draws the secret.
 
 //! What you will send next: a multi-line input that grows with its text.
 //!
@@ -28,6 +39,30 @@
 //! Alt+Enter, Ctrl+J, or `\` then Enter insert a line break. ↑↓ move by
 //! visual row and remember the column they aimed for; Home and End go to the
 //! start and end of the line (the text between line breaks), as readline does.
+//!
+//! Ctrl+U, Ctrl+K and Ctrl+W (or Alt/Ctrl+Backspace, Alt+D) put what they cut
+//! in the state's kill buffer and Ctrl+Y puts it back at the caret, as in
+//! readline (herdr's `text_editor.rs`).
+//!
+//! # One line, a preset, a secret
+//!
+//! - [`ComposerState::single_line`] makes a field — a rename, a search, a
+//!   filter. It never wraps: a window of the text follows the caret, moving
+//!   only as far as it must, and `‹` in the prompt column or `›` at the right
+//!   edge says there is more text that way. Line breaks in a paste become
+//!   spaces; Enter submits and ↑↓ are left to the host.
+//! - [`ComposerState::replace_on_type`] marks the text as a preset (a
+//!   suggested branch name): it is drawn as a selection, the first typed key
+//!   or paste replaces it whole, Backspace empties it, and a move keeps it.
+//! - [`ComposerState::masked`] is for an API key or a password. The text is
+//!   drawn as one [`Mask`] glyph per grapheme (or a fixed run that hides even
+//!   the length), never as itself; [`ComposerState::text`], `take`, `Debug`
+//!   and the rendered cells all keep it hidden. Enter answers
+//!   [`ComposerEvent::SubmittedSecret`] and the host reads the text once with
+//!   [`ComposerState::take_secret`].
+//!
+//! [`Composer::line`] gives the one-line view as a `Line` for a host that
+//! places the field inside its own paragraph (a prompt in a footer).
 
 #[cfg(feature = "catalog")]
 pub(crate) mod docs;
@@ -68,10 +103,68 @@ pub enum ComposerEvent {
     Edited,
     /// Enter on text that is not blank: the text, taken out of the composer.
     Submitted(String),
+    /// Enter on a masked composer that is not blank. The text stays in the
+    /// state, hidden, until the host takes it with
+    /// [`ComposerState::take_secret`] — so it never travels in an event a
+    /// host might log.
+    SubmittedSecret,
+}
+
+/// The glyph a masked composer draws its text as (`∙`, U+2219): one cell on
+/// every terminal, CJK ones included (`•` is East-Asian Ambiguous, two cells
+/// there).
+pub const MASK_GLYPH: char = '\u{2219}';
+
+/// How a masked composer draws its text: never as itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Mask {
+    glyph: char,
+    /// `Some(n)`: always `n` glyphs, whatever the length.
+    fixed: Option<u16>,
+}
+
+impl Default for Mask {
+    fn default() -> Self {
+        Mask::each(MASK_GLYPH)
+    }
+}
+
+impl Mask {
+    /// One `glyph` per grapheme typed: the length shows, the text does not.
+    /// A glyph that is not one cell wide falls back to [`MASK_GLYPH`].
+    pub fn each(glyph: char) -> Mask {
+        Mask {
+            glyph: Mask::one_cell(glyph),
+            fixed: None,
+        }
+    }
+
+    /// Always `count` glyphs (at least one) once anything is typed: not even
+    /// the length shows. The caret stays at the end, since a caret moving
+    /// through glyphs that do not move would hide where an edit lands.
+    pub fn fixed(glyph: char, count: u16) -> Mask {
+        Mask {
+            glyph: Mask::one_cell(glyph),
+            fixed: Some(count.max(1)),
+        }
+    }
+
+    pub fn glyph(&self) -> char {
+        self.glyph
+    }
+
+    fn one_cell(glyph: char) -> char {
+        let mut b = [0u8; 4];
+        if text::width(glyph.encode_utf8(&mut b)) == 1 {
+            glyph
+        } else {
+            MASK_GLYPH
+        }
+    }
 }
 
 /// The text, the caret, and the view's scroll.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ComposerState {
     text: String,
     /// A byte offset into `text`, always on a grapheme boundary.
@@ -82,6 +175,14 @@ pub struct ComposerState {
     scroll: usize,
     /// Rows a page moves, as last drawn.
     page: usize,
+    /// One-line mode: the first visible byte of the window, as last drawn.
+    hscroll: usize,
+    single_line: bool,
+    /// The text is a preset the first typed key replaces.
+    replace: bool,
+    /// What the last Ctrl+U / Ctrl+K / Ctrl+W cut, for Ctrl+Y.
+    killed: String,
+    mask: Option<Mask>,
 }
 
 impl Default for ComposerState {
@@ -92,7 +193,34 @@ impl Default for ComposerState {
             sticky: None,
             scroll: 0,
             page: DEFAULT_MAX_HEIGHT as usize - 1,
+            hscroll: 0,
+            single_line: false,
+            replace: false,
+            killed: String::new(),
+            mask: None,
         }
+    }
+}
+
+/// A masked state's text and kill buffer never reach a log.
+impl std::fmt::Debug for ComposerState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hidden = |s: &str| -> String {
+            if self.mask.is_some() {
+                "<masked>".to_string()
+            } else {
+                format!("{s:?}")
+            }
+        };
+        let (text, killed) = (hidden(&self.text), hidden(&self.killed));
+        f.debug_struct("ComposerState")
+            .field("text", &format_args!("{text}"))
+            .field("cursor", &self.cursor)
+            .field("single_line", &self.single_line)
+            .field("replace_on_type", &self.replace)
+            .field("killed", &format_args!("{killed}"))
+            .field("mask", &self.mask)
+            .finish_non_exhaustive()
     }
 }
 
@@ -115,6 +243,32 @@ fn clean(s: &str) -> Cow<'_, str> {
             }
             '\n' => out.push('\n'),
             '\t' => out.extend(std::iter::repeat_n(' ', TAB_CELLS)),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// `s` as one-line text (herdr `TextEditor::insert`): CR LF, CR, LF and a
+/// tab become one space each — or, in a secret, nothing — and every other
+/// control character is dropped.
+fn clean_line(s: &str, secret: bool) -> Cow<'_, str> {
+    if !s.chars().any(char::is_control) {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' | '\n' | '\t' => {
+                if c == '\r' && chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                if !secret {
+                    out.push(' ');
+                }
+            }
             c if c.is_control() => {}
             c => out.push(c),
         }
@@ -286,6 +440,125 @@ fn text_cols(width: u16) -> usize {
     (width.saturating_sub(PROMPT_WIDTH) as usize).max(1)
 }
 
+/// What the one-line view shows of a text: bytes `start..end`, whether text
+/// is hidden on either side, and the caret's cell in the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Strip {
+    start: usize,
+    end: usize,
+    left: bool,
+    right: bool,
+    caret: usize,
+}
+
+/// The one-line window over `text` at `cols` cells (herdr
+/// `TextEditor::viewport`, made stable): it moves from `prev` only as far as
+/// it must to keep the caret's cell in view, and when the text ends short of
+/// the edge it pulls back to show more on the left. `cell` measures a
+/// grapheme; the grapheme under the caret takes at least one cell. Linear in
+/// the window, not the text.
+fn window(
+    text: &str,
+    cursor: usize,
+    prev: usize,
+    cols: usize,
+    cell: &impl Fn(&str) -> usize,
+) -> (usize, usize) {
+    let cols = cols.max(1);
+    let under = text[cursor..]
+        .graphemes(true)
+        .next()
+        .map_or(1, |g| cell(g).max(1));
+    // The earliest start that still shows the caret's cell.
+    let (mut earliest, mut used) = (cursor, under);
+    for (i, g) in text[..cursor].grapheme_indices(true).rev() {
+        let c = cell(g);
+        if used + c > cols {
+            break;
+        }
+        used += c;
+        earliest = i;
+    }
+    let mut start = snap_to_grapheme(text, prev).clamp(earliest, cursor);
+    // Pull back when what follows the start, plus a cell for a caret past
+    // the end, fits — that cell counted wherever the caret is, so stepping
+    // left off the end does not shift the text.
+    let at = |i: usize, g: &str| if i == cursor { cell(g).max(1) } else { cell(g) };
+    let mut tail = 1;
+    let mut fits = true;
+    for (i, g) in text[start..].grapheme_indices(true) {
+        tail += at(start + i, g);
+        if tail > cols {
+            fits = false;
+            break;
+        }
+    }
+    if fits {
+        for (i, g) in text[..start].grapheme_indices(true).rev() {
+            let c = cell(g);
+            if tail + c > cols {
+                break;
+            }
+            tail += c;
+            start = i;
+        }
+    }
+    let (mut end, mut used) = (start, 0);
+    for (i, g) in text[start..].grapheme_indices(true) {
+        let c = at(start + i, g);
+        if used + c > cols {
+            break;
+        }
+        used += c;
+        end = start + i + g.len();
+    }
+    (start, end)
+}
+
+/// [`window`], keeping the last cell for `›` when text is hidden on the
+/// right.
+fn strip(
+    text: &str,
+    cursor: usize,
+    prev: usize,
+    cols: usize,
+    cell: &impl Fn(&str) -> usize,
+) -> Strip {
+    let (mut start, mut end) = window(text, cursor, prev, cols, cell);
+    if end < text.len() && cols >= 2 {
+        (start, end) = window(text, cursor, prev, cols - 1, cell);
+    }
+    let caret = text[start..cursor].graphemes(true).map(cell).sum();
+    Strip {
+        start,
+        end,
+        left: start > 0,
+        right: end < text.len(),
+        caret,
+    }
+}
+
+/// A grapheme as the one-line view draws it: a line break as a space.
+fn line_cell(g: &str) -> usize {
+    if g == "\n" || g == "\r\n" {
+        1
+    } else {
+        text::grapheme_width(g)
+    }
+}
+
+/// `s` as the one-line view draws it: masked, one `glyph` per grapheme;
+/// otherwise with line breaks as spaces.
+fn shown(s: &str, mask: Option<char>) -> String {
+    match mask {
+        Some(glyph) => s.graphemes(true).map(|_| glyph).collect(),
+        None => s
+            .graphemes(true)
+            .map(|g| if g == "\n" || g == "\r\n" { " " } else { g })
+            .collect(),
+    }
+}
+
 impl ComposerState {
     pub fn new() -> ComposerState {
         ComposerState::default()
@@ -298,11 +571,41 @@ impl ComposerState {
         s
     }
 
-    pub fn text(&self) -> &str {
-        &self.text
+    /// One line: no wrap, a window that follows the caret, line breaks in a
+    /// paste become spaces, and Enter submits. Line breaks already in the
+    /// text become spaces too.
+    pub fn single_line(mut self) -> ComposerState {
+        self.single_line = true;
+        let t = clean_line(&self.text, self.mask.is_some()).into_owned();
+        self.text = t;
+        self.cursor = self.cursor.min(self.text.len());
+        self.cursor = snap_to_grapheme(&self.text, self.cursor);
+        self
     }
 
-    /// The caret's byte offset into [`ComposerState::text`].
+    /// The text is a preset (a suggested name): drawn as a selection, it is
+    /// replaced whole by the first key typed or text pasted, emptied by
+    /// Backspace, and kept by a move.
+    pub fn replace_on_type(mut self, on: bool) -> ComposerState {
+        self.replace = on && !self.text.is_empty();
+        self
+    }
+
+    /// A secret — an API key, a password. One line; the text is drawn as
+    /// `mask` glyphs and never as itself, line breaks and tabs in a paste
+    /// are dropped, and only [`ComposerState::take_secret`] gives it back.
+    pub fn masked(mut self, mask: Mask) -> ComposerState {
+        self.mask = Some(mask);
+        self.single_line()
+    }
+
+    /// The text — empty while masked (use [`ComposerState::is_empty`] and
+    /// [`ComposerState::take_secret`]).
+    pub fn text(&self) -> &str {
+        if self.mask.is_some() { "" } else { &self.text }
+    }
+
+    /// The caret's byte offset into the text.
     pub fn cursor(&self) -> usize {
         self.cursor
     }
@@ -311,9 +614,41 @@ impl ComposerState {
         self.text.is_empty()
     }
 
-    /// Replace the text (cleaned as a paste is), the caret at its end.
+    pub fn is_single_line(&self) -> bool {
+        self.single_line || self.mask.is_some()
+    }
+
+    pub fn is_masked(&self) -> bool {
+        self.mask.is_some()
+    }
+
+    /// The text is still a preset the next typed key replaces.
+    pub fn is_preset(&self) -> bool {
+        self.replace
+    }
+
+    /// The one place a masked composer's text comes out: taken, leaving the
+    /// composer and its kill buffer empty. Call it on
+    /// [`ComposerEvent::SubmittedSecret`]. Works unmasked too.
+    pub fn take_secret(&mut self) -> String {
+        self.killed.clear();
+        let t = std::mem::take(&mut self.text);
+        self.clear();
+        t
+    }
+
+    fn clean<'s>(&self, s: &'s str) -> Cow<'s, str> {
+        if self.is_single_line() {
+            clean_line(s, self.mask.is_some())
+        } else {
+            clean(s)
+        }
+    }
+
+    /// Replace the text (cleaned as a paste is), the caret at its end. It is
+    /// not a preset any more.
     pub fn set_text(&mut self, text: &str) {
-        let mut t = clean(text).into_owned();
+        let mut t = self.clean(text).into_owned();
         if t.len() > MAX_BYTES {
             let mut cut = MAX_BYTES;
             while !t.is_char_boundary(cut) {
@@ -325,6 +660,8 @@ impl ComposerState {
         self.cursor = self.text.len();
         self.sticky = None;
         self.scroll = 0;
+        self.hscroll = 0;
+        self.replace = false;
     }
 
     /// Empty the composer.
@@ -332,20 +669,35 @@ impl ComposerState {
         self.set_text("");
     }
 
-    /// Take the text out, leaving the composer empty.
+    /// Take the text out, leaving the composer empty. A masked composer
+    /// gives nothing here and keeps its text: take it with
+    /// [`ComposerState::take_secret`].
     pub fn take(&mut self) -> String {
+        if self.mask.is_some() {
+            return String::new();
+        }
         let t = std::mem::take(&mut self.text);
         self.clear();
         t
     }
 
     /// Insert `s` at the caret — typing or a paste. Line breaks are kept
-    /// (CR LF and CR become LF), tabs become spaces, other control characters
-    /// are dropped. Refused whole past [`MAX_BYTES`].
+    /// (CR LF and CR become LF; one line: a space each), tabs become spaces,
+    /// other control characters are dropped. A preset is replaced whole.
+    /// Refused whole past [`MAX_BYTES`].
     pub fn insert_str(&mut self, s: &str) -> bool {
-        let s = clean(s);
-        if s.is_empty() || self.text.len() + s.len() > MAX_BYTES {
+        let s = self.clean(s);
+        if s.is_empty() {
             return false;
+        }
+        let kept = if self.replace { 0 } else { self.text.len() };
+        if kept + s.len() > MAX_BYTES {
+            return false;
+        }
+        if std::mem::take(&mut self.replace) {
+            self.text.clear();
+            self.cursor = 0;
+            self.hscroll = 0;
         }
         self.text.insert_str(self.cursor, &s);
         self.cursor = snap_to_grapheme(&self.text, self.cursor + s.len());
@@ -353,9 +705,27 @@ impl ComposerState {
         true
     }
 
+    /// Typed text: `Edited`, or `Moved` when it replaced a preset with the
+    /// same text (herdr reports that as no change).
+    fn type_str(&mut self, s: &str) -> ComposerEvent {
+        let same = self.replace && *self.clean(s) == *self.text;
+        if !self.insert_str(s) {
+            ComposerEvent::Ignored
+        } else if same {
+            ComposerEvent::Moved
+        } else {
+            ComposerEvent::Edited
+        }
+    }
+
     fn delete(&mut self, from: usize, to: usize) -> ComposerEvent {
+        let was = std::mem::take(&mut self.replace);
         if from >= to {
-            return ComposerEvent::Ignored;
+            return if was {
+                ComposerEvent::Moved
+            } else {
+                ComposerEvent::Ignored
+            };
         }
         self.text.replace_range(from..to, "");
         self.cursor = snap_to_grapheme(&self.text, from);
@@ -363,9 +733,43 @@ impl ComposerState {
         ComposerEvent::Edited
     }
 
+    /// Delete `from..to` into the kill buffer (herdr `remove(.., kill)`).
+    fn kill(&mut self, from: usize, to: usize) -> ComposerEvent {
+        if from < to {
+            self.killed = self.text[from..to].to_owned();
+        }
+        self.delete(from, to)
+    }
+
+    /// Ctrl+Y: what the last kill cut, at the caret.
+    fn yank(&mut self) -> ComposerEvent {
+        if self.killed.is_empty() {
+            return ComposerEvent::Ignored;
+        }
+        let k = std::mem::take(&mut self.killed);
+        let ev = self.type_str(&k);
+        self.killed = k;
+        ev
+    }
+
+    /// Backspace: one grapheme, or the whole preset.
+    fn backspace(&mut self) -> ComposerEvent {
+        if self.replace {
+            let had = !self.text.is_empty();
+            self.clear();
+            return if had {
+                ComposerEvent::Edited
+            } else {
+                ComposerEvent::Moved
+            };
+        }
+        self.delete(prev_grapheme(&self.text, self.cursor), self.cursor)
+    }
+
     fn move_to(&mut self, at: usize) -> ComposerEvent {
         self.sticky = None;
-        if at == self.cursor {
+        let was = std::mem::take(&mut self.replace);
+        if at == self.cursor && !was {
             return ComposerEvent::Ignored;
         }
         self.cursor = at;
@@ -407,17 +811,53 @@ impl ComposerState {
         at
     }
 
+    /// A fixed mask keeps the caret at the end.
+    fn pinned(&self) -> bool {
+        self.mask.is_some_and(|m| m.fixed.is_some())
+    }
+
+    /// The one-line view at `cols` cells, from the last drawn window.
+    fn strip(&self, cols: usize) -> Strip {
+        match self.mask {
+            Some(Mask {
+                glyph,
+                fixed: Some(n),
+            }) => {
+                let t = shown_fixed(glyph, n, self.text.is_empty());
+                strip(&t, t.len(), 0, cols, &line_cell)
+            }
+            Some(_) => strip(&self.text, self.cursor, self.hscroll, cols, &|_| 1),
+            None => strip(&self.text, self.cursor, self.hscroll, cols, &line_cell),
+        }
+    }
+
     /// Where the caret is drawn at an area `width` wide: its row and column
-    /// in the text (not the window).
+    /// in the text (not the window). One line: row 0 and the cells before
+    /// the caret as drawn.
     pub fn caret(&self, width: u16) -> (usize, usize) {
+        if self.is_single_line() {
+            let col = match self.mask {
+                Some(Mask { fixed: Some(n), .. }) if !self.text.is_empty() => usize::from(n),
+                Some(_) => self.text[..self.cursor].graphemes(true).count(),
+                None => self.text[..self.cursor]
+                    .graphemes(true)
+                    .map(line_cell)
+                    .sum(),
+            };
+            return (0, col);
+        }
         let cols = text_cols(width);
         let rows = layout(&self.text, cols);
         let (r, c, _) = display_point(&self.text, &rows, self.cursor, cols);
         (r, c)
     }
 
-    /// Rows the text takes at an area `width` wide (one for an empty text).
+    /// Rows the text takes at an area `width` wide (one for an empty text,
+    /// and always one on a single line).
     pub fn rows(&self, width: u16) -> usize {
+        if self.is_single_line() {
+            return 1;
+        }
         let cols = text_cols(width);
         let rows = layout(&self.text, cols);
         let (_, _, extra) = display_point(&self.text, &rows, self.cursor, cols);
@@ -428,6 +868,9 @@ impl ComposerState {
     /// the first or the last row the caret goes to the start or the end of
     /// the text, and only then is the key [`ComposerEvent::Ignored`].
     fn vertical(&mut self, down: bool, count: usize, width: u16) -> ComposerEvent {
+        if self.is_single_line() {
+            return ComposerEvent::Ignored;
+        }
         let cols = text_cols(width);
         let rows = layout(&self.text, cols);
         let (row, col, _) = display_point(&self.text, &rows, self.cursor, cols);
@@ -444,6 +887,7 @@ impl ComposerState {
         let last = wanted + 1 == rows.len();
         self.cursor = offset_on(&self.text, &rows[wanted], last, target);
         self.sticky = Some(target);
+        self.replace = false;
         ComposerEvent::Moved
     }
 
@@ -451,15 +895,36 @@ impl ComposerState {
     /// in (the same one given to render): ↑↓ move by the rows it wraps to.
     pub fn key(&mut self, key: KeyInput, width: u16) -> ComposerEvent {
         self.cursor = snap_to_grapheme(&self.text, self.cursor);
+        if !self.pinned() {
+            return self.apply(key, width);
+        }
+        self.cursor = self.text.len();
+        let was = self.replace;
+        let ev = self.apply(key, width);
+        self.cursor = self.text.len();
+        if ev == ComposerEvent::Moved && was == self.replace {
+            return ComposerEvent::Ignored;
+        }
+        ev
+    }
+
+    fn apply(&mut self, key: KeyInput, width: u16) -> ComposerEvent {
         let m = key.mods;
+        let one_line = self.is_single_line();
         if m.ctrl {
             return match key.key {
+                Key::Char('j') if one_line => ComposerEvent::Ignored,
                 Key::Char('j') => self.newline(),
                 Key::Char('a') => self.move_to(self.line_start()),
                 Key::Char('e') => self.move_to(self.line_end()),
-                Key::Char('u') => self.delete(self.line_start(), self.cursor),
-                Key::Char('k') => self.delete(self.cursor, self.line_end()),
-                Key::Char('w') | Key::Backspace => self.delete(self.word_left(), self.cursor),
+                Key::Char('b') => self.move_to(prev_grapheme(&self.text, self.cursor)),
+                Key::Char('f') => self.move_to(next_grapheme(&self.text, self.cursor)),
+                Key::Char('h') => self.backspace(),
+                Key::Char('d') => self.delete(self.cursor, next_grapheme(&self.text, self.cursor)),
+                Key::Char('u') => self.kill(self.line_start(), self.cursor),
+                Key::Char('k') => self.kill(self.cursor, self.line_end()),
+                Key::Char('w') | Key::Backspace => self.kill(self.word_left(), self.cursor),
+                Key::Char('y') => self.yank(),
                 Key::Left => self.move_to(self.word_left()),
                 Key::Right => self.move_to(self.word_right()),
                 Key::Home => self.move_to(0),
@@ -468,29 +933,39 @@ impl ComposerState {
             };
         }
         match key.key {
-            Key::Enter if m.shift || m.alt => self.newline(),
+            Key::Enter if m.shift || m.alt => {
+                if one_line {
+                    ComposerEvent::Ignored
+                } else {
+                    self.newline()
+                }
+            }
             Key::Enter => {
                 // fx: a backslash before the caret turns Enter into a newline.
-                if self.text[..self.cursor].ends_with('\\') {
+                if !one_line && self.text[..self.cursor].ends_with('\\') {
                     self.text.replace_range(self.cursor - 1..self.cursor, "\n");
                     self.sticky = None;
+                    self.replace = false;
                     return ComposerEvent::Edited;
                 }
                 if self.text.trim().is_empty() {
                     return ComposerEvent::Ignored;
                 }
+                if self.mask.is_some() {
+                    self.replace = false;
+                    return ComposerEvent::SubmittedSecret;
+                }
                 ComposerEvent::Submitted(self.take())
             }
+            Key::Char('b') if m.alt => self.move_to(self.word_left()),
+            Key::Char('f') if m.alt => self.move_to(self.word_right()),
+            Key::Char('d') if m.alt => self.kill(self.cursor, self.word_right()),
             Key::Char(c) if !m.alt => {
                 let mut b = [0u8; 4];
-                if self.insert_str(c.encode_utf8(&mut b)) {
-                    ComposerEvent::Edited
-                } else {
-                    ComposerEvent::Ignored
-                }
+                self.type_str(c.encode_utf8(&mut b))
             }
-            Key::Backspace if m.alt => self.delete(self.word_left(), self.cursor),
-            Key::Backspace => self.delete(prev_grapheme(&self.text, self.cursor), self.cursor),
+            Key::Backspace if m.alt => self.kill(self.word_left(), self.cursor),
+            Key::Backspace => self.backspace(),
             Key::Delete => self.delete(self.cursor, next_grapheme(&self.text, self.cursor)),
             Key::Left if m.alt => self.move_to(self.word_left()),
             Key::Right if m.alt => self.move_to(self.word_right()),
@@ -515,12 +990,22 @@ impl ComposerState {
     }
 }
 
+/// What a fixed mask draws: `n` glyphs, or nothing while empty.
+fn shown_fixed(glyph: char, n: u16, empty: bool) -> String {
+    if empty {
+        String::new()
+    } else {
+        std::iter::repeat_n(glyph, usize::from(n)).collect()
+    }
+}
+
 /// A growing multi-line input with a prompt glyph and a drawn caret.
 #[derive(Debug, Clone)]
 pub struct Composer<'a> {
     prompt: Cow<'a, str>,
     placeholder: Cow<'a, str>,
     max_height: u16,
+    selection: Option<Style>,
     theme: Theme,
 }
 
@@ -536,6 +1021,7 @@ impl<'a> Composer<'a> {
             prompt: Cow::Borrowed("\u{276f}"),
             placeholder: Cow::Borrowed(""),
             max_height: DEFAULT_MAX_HEIGHT,
+            selection: None,
             theme: Theme::default(),
         }
     }
@@ -563,7 +1049,24 @@ impl<'a> Composer<'a> {
         self
     }
 
-    /// Rows to give it at `width`: its rows, up to the max height.
+    /// How a preset ([`ComposerState::replace_on_type`]) is drawn. Default
+    /// `theme.selected()`; a host that knows the terminal's background
+    /// passes its selection colour.
+    pub fn selection_style(mut self, style: Style) -> Self {
+        self.selection = Some(style);
+        self
+    }
+
+    fn body_style(&self, state: &ComposerState) -> Style {
+        if state.replace {
+            self.selection.unwrap_or_else(|| self.theme.selected())
+        } else {
+            self.theme.text()
+        }
+    }
+
+    /// Rows to give it at `width`: its rows, up to the max height (one for
+    /// a single line).
     pub fn height(&self, state: &ComposerState, width: u16) -> u16 {
         (state.rows(width).min(self.max_height as usize) as u16).max(1)
     }
@@ -573,6 +1076,15 @@ impl<'a> Composer<'a> {
     pub fn cursor_position(&self, state: &ComposerState, area: Rect) -> Option<Position> {
         if area.is_empty() {
             return None;
+        }
+        if state.is_single_line() {
+            let caret = if state.text.is_empty() {
+                0
+            } else {
+                state.strip(text_cols(area.width)).caret
+            };
+            let x = area.x + PROMPT_WIDTH + caret as u16;
+            return (x < area.right()).then_some(Position { x, y: area.y });
         }
         let limit = area.height.min(self.max_height) as usize;
         let (row, col) = state.caret(area.width);
@@ -588,6 +1100,99 @@ impl<'a> Composer<'a> {
             text::pad(&g, PROMPT_WIDTH as usize, text::Align::Left),
             style,
         )
+    }
+
+    /// The prompt, then the placeholder behind the caret.
+    fn empty_line(&self, width: u16) -> Line<'static> {
+        let t = &self.theme;
+        let caret = Style::new().add_modifier(Modifier::REVERSED);
+        let mut spans = vec![self.gutter(&self.prompt, t.accent())];
+        let (first, rest) = match self.placeholder.graphemes(true).next() {
+            Some(g) => (g.to_string(), self.placeholder[g.len()..].to_string()),
+            None => (" ".to_string(), String::new()),
+        };
+        spans.push(Span::styled(first, t.dim().patch(caret)));
+        spans.push(Span::styled(rest, t.dim()));
+        text::truncate_line(Line::from(spans), width as usize)
+    }
+
+    /// The one-line view as a line of at most `width` cells: the prompt (or
+    /// `‹` when text is hidden on the left), the window of text around the
+    /// caret, the caret as a reversed cell, and `›` at the right edge when
+    /// text is hidden there. A masked state shows only its mask glyphs. For
+    /// a host that places the field inside its own paragraph; like render,
+    /// it moves the window. A multi-line state is shown on one line, its
+    /// line breaks as spaces.
+    pub fn line(&self, state: &mut ComposerState, width: u16) -> Line<'static> {
+        if width == 0 {
+            return Line::default();
+        }
+        state.cursor = snap_to_grapheme(&state.text, state.cursor);
+        if state.pinned() {
+            state.cursor = state.text.len();
+        }
+        if state.text.is_empty() {
+            state.hscroll = 0;
+            return self.empty_line(width);
+        }
+        let t = &self.theme;
+        let caret = Style::new().add_modifier(Modifier::REVERSED);
+        let body = self.body_style(state);
+        let cols = text_cols(width);
+        let st = state.strip(cols);
+        // What is drawn: a fixed mask's own glyphs, or the text (masked
+        // per grapheme, or as it is).
+        let fixed;
+        let (src, cursor, glyph) = match state.mask {
+            Some(Mask {
+                glyph,
+                fixed: Some(n),
+            }) => {
+                fixed = shown_fixed(glyph, n, false);
+                (fixed.as_str(), fixed.len(), None)
+            }
+            Some(m) => {
+                state.hscroll = st.start;
+                (state.text.as_str(), state.cursor, Some(m.glyph))
+            }
+            None => {
+                state.hscroll = st.start;
+                (state.text.as_str(), state.cursor, None)
+            }
+        };
+        let mut spans = vec![if st.left {
+            self.gutter("\u{2039}", t.dim())
+        } else {
+            self.gutter(&self.prompt, t.accent())
+        }];
+        spans.push(Span::styled(shown(&src[st.start..cursor], glyph), body));
+        let mut used = st.caret;
+        if cursor < st.end {
+            let g = src[cursor..].graphemes(true).next().unwrap_or("");
+            let mut under = shown(g, glyph);
+            if text::width(&under) == 0 {
+                under = " ".to_string();
+            }
+            used += text::width(&under);
+            spans.push(Span::styled(under, body.patch(caret)));
+            let after = cursor + g.len();
+            if after < st.end {
+                let rest = shown(&src[after..st.end], glyph);
+                used += text::width(&rest);
+                spans.push(Span::styled(rest, body));
+            }
+        } else if used < cols {
+            used += 1;
+            spans.push(Span::styled(" ", t.text().patch(caret)));
+        }
+        if st.right {
+            let pad = cols.saturating_sub(used + 1);
+            if pad > 0 {
+                spans.push(Span::raw(" ".repeat(pad)));
+            }
+            spans.push(Span::styled("\u{203a}", t.dim()));
+        }
+        text::truncate_line(Line::from(spans), width as usize)
     }
 }
 
@@ -614,19 +1219,19 @@ impl StatefulWidget for &Composer<'_> {
         state.cursor = snap_to_grapheme(&state.text, state.cursor);
         state.page = limit.saturating_sub(1).max(1);
 
-        if state.text.is_empty() {
+        if state.is_single_line() {
             state.scroll = 0;
-            let mut spans = vec![self.gutter(&self.prompt, t.accent())];
-            let (first, rest) = match self.placeholder.graphemes(true).next() {
-                Some(g) => (g.to_string(), self.placeholder[g.len()..].to_string()),
-                None => (" ".to_string(), String::new()),
-            };
-            spans.push(Span::styled(first, t.dim().patch(caret)));
-            spans.push(Span::styled(rest, t.dim()));
-            let line = text::truncate_line(Line::from(spans), area.width as usize);
+            let line = self.line(state, area.width);
             buf.set_line(area.x, area.y, &line, area.width);
             return;
         }
+        if state.text.is_empty() {
+            state.scroll = 0;
+            let line = self.empty_line(area.width);
+            buf.set_line(area.x, area.y, &line, area.width);
+            return;
+        }
+        let body = self.body_style(state);
 
         let rows = layout(&state.text, cols);
         let (crow, ccol, extra) = display_point(&state.text, &rows, state.cursor, cols);
@@ -648,8 +1253,8 @@ impl StatefulWidget for &Composer<'_> {
             let mut spans = vec![gutter];
             if let Some(row) = rows.get(r) {
                 // Hanging spaces past the margin are clipped; they are spaces.
-                let (body, _) = text::take_cells(&state.text[row.start..row.body_end], cols);
-                spans.push(Span::styled(body.to_string(), t.text()));
+                let (text, _) = text::take_cells(&state.text[row.start..row.body_end], cols);
+                spans.push(Span::styled(text.to_string(), body));
             }
             let line = text::truncate_line(Line::from(spans), area.width as usize);
             buf.set_line(area.x, y, &line, area.width);
@@ -937,6 +1542,385 @@ mod tests {
         assert!(snapshot::lines(&buf)[0].starts_with('\u{22ee}'));
         let pos = c.cursor_position(&st, buf.area).expect("on screen");
         assert_eq!(pos.y, 3, "the caret's row is the last one shown");
+    }
+
+    // ---- herdr `text_editor.rs` tests, ported -------------------------
+
+    fn line_state(text: &str) -> ComposerState {
+        ComposerState::with_text(text).single_line()
+    }
+
+    fn alt(k: Key) -> KeyInput {
+        KeyInput {
+            key: k,
+            mods: Mods {
+                alt: true,
+                ..Mods::default()
+            },
+        }
+    }
+
+    fn on_boundary(st: &ComposerState) -> bool {
+        st.cursor == st.text.len() || st.text.grapheme_indices(true).any(|(i, _)| i == st.cursor)
+    }
+
+    /// herdr `every_binding_edits_at_the_cursor`.
+    #[test]
+    fn every_binding_edits_at_the_cursor() {
+        let ctrl = KeyInput::ctrl;
+        for (key, text, cursor, killed) in [
+            (Key::Left.into(), "one two", 3, ""),
+            (ctrl(Key::Char('b')), "one two", 3, ""),
+            (Key::Right.into(), "one two", 5, ""),
+            (ctrl(Key::Char('f')), "one two", 5, ""),
+            (Key::Home.into(), "one two", 0, ""),
+            (ctrl(Key::Char('a')), "one two", 0, ""),
+            (Key::End.into(), "one two", 7, ""),
+            (ctrl(Key::Char('e')), "one two", 7, ""),
+            (Key::Backspace.into(), "onetwo", 3, ""),
+            (ctrl(Key::Char('h')), "onetwo", 3, ""),
+            (Key::Delete.into(), "one wo", 4, ""),
+            (ctrl(Key::Char('d')), "one wo", 4, ""),
+            (alt(Key::Char('b')), "one two", 0, ""),
+            (alt(Key::Char('f')), "one two", 7, ""),
+            (ctrl(Key::Char('u')), "two", 0, "one "),
+            (ctrl(Key::Char('k')), "one ", 4, "two"),
+            (ctrl(Key::Char('w')), "two", 0, "one "),
+            (alt(Key::Backspace), "two", 0, "one "),
+            (ctrl(Key::Backspace), "two", 0, "one "),
+            (alt(Key::Char('d')), "one ", 4, "two"),
+            (ctrl(Key::Char('y')), "one two", 4, ""),
+            (KeyInput::from('X'), "one Xtwo", 5, ""),
+        ] {
+            for mut st in [line_state("one two"), ComposerState::with_text("one two")] {
+                st.cursor = 4;
+                let ev = st.key(key, 40);
+                assert!(on_boundary(&st), "{key:?}");
+                assert_eq!(
+                    (st.text(), st.cursor(), st.killed.as_str()),
+                    (text, cursor, killed),
+                    "{key:?}"
+                );
+                assert_eq!(ev == ComposerEvent::Edited, text != "one two", "{key:?}");
+                let mut empty = line_state("");
+                empty.key(key, 40);
+                assert!(on_boundary(&empty));
+            }
+        }
+    }
+
+    /// herdr `suggestions_movement_kills_and_yank`.
+    #[test]
+    fn a_preset_is_replaced_by_typing_and_kept_by_a_move() {
+        for (k, expected) in [
+            (Key::Left, "defaulxt"),
+            (Key::Right, "defaultx"),
+            (Key::Home, "xdefault"),
+            (Key::End, "defaultx"),
+        ] {
+            let mut st = line_state("default").replace_on_type(true);
+            assert_ne!(st.key(k.into(), 40), ComposerEvent::Ignored, "{k:?}");
+            assert!(!st.is_preset());
+            st.key('x'.into(), 40);
+            assert_eq!(st.text(), expected, "{k:?}");
+        }
+        let mut st = line_state("default").replace_on_type(true);
+        assert!(st.insert_str("new"));
+        assert_eq!(st.text(), "new");
+        // Typing the preset's own text changes nothing, typing other text does.
+        for (typed, ev) in [('x', ComposerEvent::Moved), ('y', ComposerEvent::Edited)] {
+            let mut st = line_state("x").replace_on_type(true);
+            assert_eq!(st.key(typed.into(), 40), ev);
+            assert_eq!(st.text(), typed.to_string());
+            assert!(!st.is_preset());
+        }
+        let mut st = line_state("default").replace_on_type(true);
+        st.key(Key::Backspace.into(), 40);
+        assert!(st.is_empty());
+        let mut st = line_state("one two").replace_on_type(true);
+        st.key(KeyInput::ctrl(Key::Char('w')), 40);
+        assert_eq!(st.text(), "one ");
+        assert!(!st.is_preset());
+        st.key(KeyInput::ctrl(Key::Char('k')), 40);
+        st.key(Key::Backspace.into(), 40);
+        st.key(KeyInput::ctrl(Key::Char('y')), 40);
+        st.key(KeyInput::ctrl(Key::Char('y')), 40);
+        assert_eq!(st.text(), "onetwotwo");
+        st.key(KeyInput::ctrl(Key::Char('u')), 40);
+        assert_eq!(st.killed, "onetwotwo");
+        let mut other = line_state("");
+        assert_eq!(
+            other.key(KeyInput::ctrl(Key::Char('y')), 40),
+            ComposerEvent::Ignored
+        );
+        assert!(other.is_empty());
+        // An empty yank leaves a preset alone; a paste replaces it.
+        let mut st = line_state("main").replace_on_type(true);
+        st.key(KeyInput::ctrl(Key::Char('y')), 40);
+        assert!(st.is_preset());
+        st.insert_str("dev\n");
+        assert_eq!(st.text(), "dev ");
+    }
+
+    /// herdr `unicode_graphemes_and_boundary_changing_edits`.
+    #[test]
+    fn edits_that_join_clusters_keep_the_caret_on_a_boundary() {
+        let mut st = line_state("e\u{301}中👩\u{200d}💻");
+        for expected in ["e\u{301}中", "e\u{301}", ""] {
+            st.key(Key::Backspace.into(), 40);
+            assert_eq!(st.text(), expected);
+        }
+        let mut st = line_state("👩💻");
+        st.key(Key::Left.into(), 40);
+        st.insert_str("\u{200d}");
+        assert_eq!(st.cursor(), st.text().len());
+        st.key(Key::Backspace.into(), 40);
+        assert!(st.is_empty());
+        let mut st = line_state("\u{301}x");
+        st.key(Key::Home.into(), 40);
+        st.insert_str("e");
+        assert_eq!(st.cursor(), "e\u{301}".len());
+        st.key(Key::Delete.into(), 40);
+        assert_eq!(st.text(), "e\u{301}");
+    }
+
+    /// herdr `insertion_normalizes_controls_and_respects_host_text`.
+    #[test]
+    fn a_one_line_paste_turns_breaks_and_tabs_into_spaces() {
+        let mut st = line_state("ab");
+        st.key(Key::Left.into(), 40);
+        st.insert_str("中\r\n\r\n\t\x00\x1b\u{7f}e\u{301}");
+        assert_eq!(st.text(), "a中   e\u{301}b");
+        let st = ComposerState::with_text("one\ntwo").single_line();
+        assert_eq!(st.text(), "one two", "a multi-line text made one line");
+    }
+
+    /// herdr `viewport_and_render_are_pure_and_grapheme_safe`, with the
+    /// window kept where it was and `‹ ›` where text is hidden.
+    #[test]
+    fn the_window_keeps_the_caret_in_view_at_every_width() {
+        let c = Composer::new().theme(Theme::mono());
+        for text in [
+            "abcdefghijklmnopqrstuvwxyz",
+            "e\u{301}中👩\u{200d}💻xyz",
+            "\u{301}abc",
+        ] {
+            let mut st = line_state(text);
+            let offsets: Vec<usize> = text
+                .grapheme_indices(true)
+                .map(|(i, _)| i)
+                .chain([text.len()])
+                .collect();
+            for &cursor in &offsets {
+                for cols in [0u16, 1, 2, 3, 8, 80] {
+                    st.cursor = cursor;
+                    let width = cols + PROMPT_WIDTH;
+                    let (t0, c0) = (st.text.clone(), st.cursor);
+                    let line = c.line(&mut st, width);
+                    assert!(
+                        text::line_width(&line) <= usize::from(width),
+                        "{text:?} {cols}"
+                    );
+                    assert_eq!((st.text.clone(), st.cursor), (t0, c0), "pure");
+                    assert_eq!(c.line(&mut st, width), line, "idempotent");
+                    let buf = render(&c, &mut st, width, 1);
+                    let caret: Vec<u16> = (0..width)
+                        .filter(|&x| buf[(x, 0)].modifier.contains(Modifier::REVERSED))
+                        .collect();
+                    assert!(!caret.is_empty() || cols == 0, "{text:?} {cursor} {cols}");
+                    if let Some(pos) = c.cursor_position(&st, buf.area) {
+                        assert_eq!(Some(&pos.x), caret.first(), "{text:?} {cursor} {cols}");
+                    }
+                }
+            }
+        }
+        // herdr pins `("def", 3)` at the end of `abcdef` in four cells.
+        let mut st = line_state("abcdef");
+        let row = |st: &mut ComposerState| snapshot::lines(&render(&c, st, 6, 1))[0].clone();
+        assert_eq!(row(&mut st), "\u{2039} def");
+        assert_eq!(st.strip(4).caret, 3);
+        // Stepping left from the end moves the caret, not the text.
+        st.key(Key::Left.into(), 6);
+        assert_eq!(row(&mut st), "\u{2039} def");
+        assert_eq!(st.strip(4).caret, 2);
+        st.key(Key::Left.into(), 6);
+        st.key(Key::Left.into(), 6);
+        assert_eq!(row(&mut st), "\u{2039} def", "the caret on `d`");
+        // Past the left edge the window follows by one grapheme.
+        st.key(Key::Left.into(), 6);
+        assert_eq!(row(&mut st), "\u{2039} cdef");
+        st.key(Key::Home.into(), 6);
+        assert_eq!(
+            row(&mut st),
+            "\u{276f} abc\u{203a}",
+            "`›`: more on the right"
+        );
+        // Deleting at the end pulls hidden text back in.
+        let mut st = line_state("abcdefgh");
+        row(&mut st);
+        for _ in 0..3 {
+            st.key(Key::Backspace.into(), 6);
+        }
+        assert_eq!(row(&mut st), "\u{2039} cde");
+    }
+
+    #[test]
+    fn one_line_leaves_up_down_and_newline_chords_to_the_host() {
+        let mut st = line_state("draft");
+        for k in [Key::Up, Key::Down, Key::PageUp, Key::PageDown] {
+            assert_eq!(st.key(k.into(), 20), ComposerEvent::Ignored, "{k:?}");
+        }
+        assert_eq!(st.key(shift(Key::Enter), 20), ComposerEvent::Ignored);
+        assert_eq!(
+            st.key(KeyInput::ctrl(Key::Char('j')), 20),
+            ComposerEvent::Ignored
+        );
+        typed(&mut st, "\\", 20);
+        assert_eq!(
+            st.key(Key::Enter.into(), 20),
+            ComposerEvent::Submitted("draft\\".into())
+        );
+        let c = Composer::new().max_height(4);
+        assert_eq!(c.height(&line_state("a b c d e f g h"), 5), 1);
+    }
+
+    #[test]
+    fn a_preset_is_drawn_as_a_selection() {
+        let t = Theme::dark();
+        let c = Composer::new().theme(t);
+        let mut st = line_state("main").replace_on_type(true);
+        let buf = render(&c, &mut st, 20, 1);
+        assert_eq!(snapshot::lines(&buf)[0], "\u{276f} main");
+        for x in 2..6 {
+            assert_eq!(buf[(x, 0)].bg, t.surface_raised, "{x}");
+        }
+        assert!(buf[(6, 0)].modifier.contains(Modifier::REVERSED), "caret");
+        typed(&mut st, "d", 20);
+        let buf = render(&c, &mut st, 20, 1);
+        assert_eq!(snapshot::lines(&buf)[0], "\u{276f} d");
+        assert_ne!(buf[(2, 0)].bg, t.surface_raised);
+        // A host colour wins over the theme's.
+        let sel = Style::new().add_modifier(Modifier::UNDERLINED);
+        let mut st = line_state("main").replace_on_type(true);
+        let buf = render(&c.clone().selection_style(sel), &mut st, 20, 1);
+        assert!(buf[(2, 0)].modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn multi_line_kills_fill_the_buffer_and_ctrl_y_puts_it_back() {
+        let mut st = ComposerState::with_text("first line\nsecond line");
+        st.key(KeyInput::ctrl(Key::Char('u')), 40);
+        assert_eq!(st.text(), "first line\n");
+        st.key(KeyInput::ctrl(Key::Home), 40);
+        assert_eq!(
+            st.key(KeyInput::ctrl(Key::Char('y')), 40),
+            ComposerEvent::Edited
+        );
+        assert_eq!(st.text(), "second linefirst line\n");
+    }
+
+    // ---- masked --------------------------------------------------------
+
+    /// A secret whose characters appear nowhere in the composer's own chrome.
+    const SECRET: &str = "sk-ant-api03-한글-👩\u{200d}💻-ÄQZ_9";
+
+    fn assert_no_secret_in(s: &str, what: &str) {
+        for c in s.chars() {
+            assert!(
+                !SECRET.contains(c) || c == ' ',
+                "{what}: secret character {c:?} in {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_masked_composer_never_draws_the_secret() {
+        for mask in [Mask::default(), Mask::fixed(MASK_GLYPH, 8), Mask::each('*')] {
+            for theme in [Theme::ansi(), Theme::dark(), Theme::mono()] {
+                let c = Composer::new().placeholder("paste a key").theme(theme);
+                let mut st = ComposerState::with_text(SECRET).masked(mask);
+                for w in 1..48u16 {
+                    for k in [Key::End, Key::Left, Key::Left, Key::Home, Key::Right] {
+                        st.key(k.into(), w);
+                        let buf = render(&c, &mut st, w, 1);
+                        for cell in buf.content() {
+                            assert_no_secret_in(cell.symbol(), "cell");
+                        }
+                        assert_no_secret_in(&snapshot::text(&buf), "snapshot");
+                        for span in c.line(&mut st, w).spans {
+                            assert_no_secret_in(&span.content, "line");
+                        }
+                    }
+                }
+                assert_eq!(st.text(), "");
+                assert_eq!(st.take(), "", "take gives nothing");
+                assert!(!st.is_empty(), "and keeps the text");
+                // Neither the text nor what a kill cut shows in Debug.
+                st.key(KeyInput::ctrl(Key::Char('w')), 40);
+                let dbg = format!("{st:?}");
+                for part in SECRET.split('-').filter(|p| p.len() > 2) {
+                    assert!(!dbg.contains(part), "debug shows {part:?}: {dbg}");
+                }
+            }
+        }
+        // One glyph per grapheme: the family emoji is one.
+        let c = Composer::new().theme(Theme::mono());
+        let mut st = ComposerState::with_text("a👩\u{200d}💻b").masked(Mask::default());
+        let row = snapshot::lines(&render(&c, &mut st, 20, 1))[0].clone();
+        assert_eq!(row, "\u{276f} \u{2219}\u{2219}\u{2219}");
+        // A fixed mask hides the length and keeps the caret at the end.
+        let mut st = ComposerState::with_text("ab").masked(Mask::fixed('*', 6));
+        assert_eq!(
+            snapshot::lines(&render(&c, &mut st, 20, 1))[0],
+            "\u{276f} ******"
+        );
+        assert_eq!(st.key(Key::Home.into(), 20), ComposerEvent::Ignored);
+        assert_eq!(st.cursor(), 2);
+        st.key(Key::Backspace.into(), 20);
+        st.key('z'.into(), 20);
+        assert_eq!(st.take_secret(), "az");
+        // A glyph wider than a cell falls back to the default.
+        assert_eq!(Mask::each('가').glyph(), MASK_GLYPH);
+    }
+
+    #[test]
+    fn enter_on_a_masked_composer_hands_the_secret_over_only_on_request() {
+        let mut st = ComposerState::new().masked(Mask::default());
+        assert_eq!(st.key(Key::Enter.into(), 20), ComposerEvent::Ignored);
+        // A key copied with its line break: the break is dropped, not a space.
+        st.insert_str("sk-123\r\n");
+        typed(&mut st, "4", 20);
+        assert_eq!(
+            st.key(Key::Enter.into(), 20),
+            ComposerEvent::SubmittedSecret
+        );
+        assert_eq!(st.text(), "");
+        st.key(KeyInput::ctrl(Key::Char('w')), 20);
+        st.key(KeyInput::ctrl(Key::Char('y')), 20);
+        assert_eq!(st.take_secret(), "sk-1234");
+        assert!(st.is_empty() && st.killed.is_empty(), "and the kill buffer");
+        assert_eq!(st.take_secret(), "");
+    }
+
+    #[test]
+    fn line_is_the_one_line_view_for_a_host_paragraph() {
+        let c = Composer::new().prompt("").theme(Theme::mono());
+        let mut st = line_state("hello");
+        let line = c.line(&mut st, 10);
+        let s: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(s, "  hello ");
+        let caret = line.spans.last().unwrap();
+        assert!(caret.style.add_modifier.contains(Modifier::REVERSED));
+        // A multi-line state on one line: its breaks are spaces.
+        let mut st = ComposerState::with_text("a\nb");
+        let s: String = c
+            .line(&mut st, 10)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(s, "  a b ");
+        assert_eq!(c.line(&mut st, 0), Line::default());
     }
 
     #[test]

@@ -7,6 +7,12 @@
 // colours are arguments), the 256-colour table is computed instead of listed,
 // `best_color` also maps to the 16 named colours, and the terminal probe itself
 // is left to the host.
+//
+// Derived from herdrdev/herdr `src/ui/panes.rs` (`automatic_selection_bg`,
+// `selection_fg_for_bg`, `mix_rgb`) at ee5bfb5041bb3e4a49d591c72308aae3c81ecdde
+// (Apache-2.0): a selection colour from the host background. Modified by 2lab:
+// the WCAG luminance and contrast here are reused, no palette fallback (the
+// theme falls back to reversed instead).
 
 //! Colour arithmetic on RGB, and graceful fallback from true colour.
 //!
@@ -17,6 +23,9 @@
 //!
 //! - [`blend`], [`luma`], [`is_light`], [`relative_luminance`],
 //!   [`contrast_ratio`], [`readable_on`]: arithmetic on `(r, g, b)`.
+//! - [`selection_colors`]: a selection's background and foreground computed
+//!   from the terminal's own background (herdr), behind
+//!   [`Theme::selection_on`](crate::Theme::selection_on).
 //! - [`best_color`] turns an RGB value into what a terminal at a
 //!   [`ColorLevel`] can show: itself, the nearest xterm 256-colour index, or
 //!   the nearest of the 16 named colours.
@@ -105,6 +114,43 @@ pub fn readable_on(preferred: Rgb, background: Rgb) -> Rgb {
         .map(|step| blend(end, preferred, step as f32 / 255.0))
         .find(|c| contrast_ratio(*c, background) >= MIN_TEXT_CONTRAST)
         .unwrap_or(end)
+}
+
+/// `base` moved `amount` (0.0–1.0) of the way to `target`, each channel
+/// rounded (herdr `mix_rgb`).
+pub fn mix(base: Rgb, target: Rgb, amount: f32) -> Rgb {
+    let a = amount.clamp(0.0, 1.0);
+    let ch = |b: u8, t: u8| (f32::from(b) + (f32::from(t) - f32::from(b)) * a).round() as u8;
+    (
+        ch(base.0, target.0),
+        ch(base.1, target.1),
+        ch(base.2, target.2),
+    )
+}
+
+/// How far a selection moves the background toward white or black.
+pub const SELECTION_MIX: f32 = 0.28;
+
+/// A selection on a terminal whose background is `bg`, as `(background,
+/// foreground)` (herdr `automatic_selection_bg`, `selection_fg_for_bg`): the
+/// background moved [`SELECTION_MIX`] toward white when it is dark (relative
+/// luminance under 0.5), toward black when it is light; the foreground black
+/// or white, whichever contrasts more with that — at least 4.5:1 for any
+/// background.
+pub fn selection_colors(bg: Rgb) -> (Rgb, Rgb) {
+    let (black, white) = ((0, 0, 0), (255, 255, 255));
+    let target = if relative_luminance(bg) < 0.5 {
+        white
+    } else {
+        black
+    };
+    let sel = mix(bg, target, SELECTION_MIX);
+    let fg = if contrast_ratio(black, sel) > contrast_ratio(white, sel) {
+        black
+    } else {
+        white
+    };
+    (sel, fg)
 }
 
 /// Distance between two colours as the eye sees it (CIE76: Euclidean distance
@@ -377,6 +423,37 @@ mod tests {
         }
         // Already readable: untouched.
         assert_eq!(readable_on((0, 0, 0), (255, 255, 255)), (0, 0, 0));
+    }
+
+    /// herdr `automatic_selection_rgb_style_is_readable_with_or_without_host_background`.
+    #[test]
+    fn selection_colours_from_the_host_background() {
+        for (bg, sel, fg) in [
+            ((239, 241, 245), (172, 174, 176), (0, 0, 0)),
+            ((26, 27, 38), (90, 91, 99), (255, 255, 255)),
+            ((45, 53, 59), (104, 110, 114), (255, 255, 255)),
+        ] {
+            assert_eq!(selection_colors(bg), (sel, fg), "{bg:?}");
+        }
+        // herdr `automatic_selection_background_uses_host_background`.
+        let (sel, _) = selection_colors((12, 14, 16));
+        assert!(relative_luminance(sel) > relative_luminance((12, 14, 16)));
+        // Readable on every grey and on saturated backgrounds.
+        let mut bgs: Vec<Rgb> = (0..=255u8).map(|v| (v, v, v)).collect();
+        bgs.extend([
+            (255, 0, 0),
+            (0, 0, 255),
+            (0, 128, 0),
+            (255, 255, 0),
+            (128, 0, 128),
+        ]);
+        for bg in bgs {
+            let (sel, fg) = selection_colors(bg);
+            assert!(contrast_ratio(fg, sel) >= MIN_TEXT_CONTRAST, "{bg:?}");
+            assert_ne!(sel, bg, "{bg:?}: the selection must differ");
+        }
+        assert_eq!(mix((0, 0, 0), (255, 255, 255), 0.5), (128, 128, 128));
+        assert_eq!(mix((10, 20, 30), (0, 0, 0), 2.0), (0, 0, 0), "clamped");
     }
 
     #[test]
