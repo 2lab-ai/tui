@@ -153,12 +153,12 @@ pub fn segments(series: &Series, rank: usize) -> Vec<Segment> {
     out
 }
 
-/// `1.2k`, `3.4M` (llmux `human_count`, for any non-negative value).
+/// `1.2k`, `3.4M`, `243.6G` (llmux `human_count`, for any non-negative value).
+/// Values of a thousand and up use [`crate::format::human_count`]'s ladder, so
+/// an axis label never reads `1000.0k` and never runs out of units.
 pub fn human(v: f64) -> String {
-    if v >= 1_000_000.0 {
-        format!("{:.1}M", v / 1_000_000.0)
-    } else if v >= 1_000.0 {
-        format!("{:.1}k", v / 1_000.0)
+    if v >= 1_000.0 {
+        crate::format::human_count(v as u64)
     } else {
         format!("{v:.0}")
     }

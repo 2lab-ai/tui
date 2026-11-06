@@ -159,19 +159,28 @@ pub fn percent(fraction: f64) -> String {
     }
 }
 
-/// A count in at most five cells: `999`, `1.2k`, `3.4M`. A value that would
+/// A count in at most six cells: `999`, `1.2k`, `243.6k`, `3.4M`, `243.6G`,
+/// up through `T`, `P` and `E` (`u64::MAX` reads `18.4E`). A value that would
 /// round up to `1000.0` of one unit moves to the next (`999_999` → `1.0M`).
 pub fn human_count(n: u64) -> String {
+    const UNITS: [(f64, &str); 6] = [
+        (1e3, "k"),
+        (1e6, "M"),
+        (1e9, "G"),
+        (1e12, "T"),
+        (1e15, "P"),
+        (1e18, "E"),
+    ];
     if n < 1_000 {
         return n.to_string();
     }
-    if n < 1_000_000 {
-        let k = format!("{:.1}k", n as f64 / 1_000.0);
-        if !k.starts_with("1000") {
-            return k;
-        }
-    }
-    format!("{:.1}M", n as f64 / 1_000_000.0)
+    let v = n as f64;
+    let (scale, unit) = UNITS
+        .iter()
+        .copied()
+        .find(|(scale, _)| v / scale < 999.95)
+        .unwrap_or(UNITS[UNITS.len() - 1]);
+    format!("{:.1}{unit}", v / scale)
 }
 
 /// [`human_count`], or `—` when the upstream never reported the number.
@@ -454,6 +463,19 @@ mod tests {
         assert_eq!(human_count(999_950), "1.0M");
         assert_eq!(human_count(999_999), "1.0M");
         assert_eq!(human_count(1_000_000), "1.0M");
+        assert_eq!(human_count(999_950_000), "1.0G");
+    }
+
+    #[test]
+    fn human_count_never_clips_a_unit_off_a_big_number() {
+        // llmux's models table showed `243578.5` for 243.6 billion tokens: the
+        // old ladder stopped at `M` and the column cut the unit off.
+        assert_eq!(human_count(243_578_500_000), "243.6G");
+        assert_eq!(human_count(7_100_000_000_000), "7.1T");
+        assert_eq!(human_count(u64::MAX), "18.4E");
+        for n in [1_000u64, 999_949, 999_950, 243_578_500_000, u64::MAX] {
+            assert!(crate::text::width(&human_count(n)) <= 6, "{n}");
+        }
     }
 
     #[test]
