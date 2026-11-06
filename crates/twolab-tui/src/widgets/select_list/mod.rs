@@ -7,6 +7,18 @@
 // app event channel; tabs, side panels, toggles, hyperlinks and Codex's view
 // stack are left behind. Styles come from the `Theme`.
 
+// Tree rows, group toggles, meta columns and the detail line derived from
+// herdrdev/herdr `src/client/shell/overlays.rs` (`render_navigator_overlay`)
+// and `src/client/shell/sidebar.rs` (`workspace_entries`,
+// `render_parent_group_toggle`, `render_workspace_rows`) at
+// ee5bfb5041bb3e4a49d591c72308aae3c81ecdde (Apache-2.0). Modified by 2lab:
+// connectors come from each item's depth in one backward pass (herdr scans
+// per row and handles two levels); a folded group says how many rows it
+// hides (`+N`); meta columns are host-defined widths with their own
+// thresholds and end in `…` instead of being cut silently at 11 cells; a
+// search shows matches with their ancestors; ←/→ fold, unfold and walk the
+// tree; glyphs are configurable (`▸`/`▾` are Narrow).
+
 //! A list to pick one item from: which model, which session, which account.
 //!
 //! Ported from OpenAI Codex `bottom_pane/list_selection_view.rs` (Apache-2.0),
@@ -20,6 +32,14 @@
 //! Keys: ↑/↓ (Ctrl-P/N) move and wrap, PgUp/PgDn and Home/End clamp, Enter
 //! picks, Esc goes back, digits 1–9 pick the Nth enabled row when the search
 //! line is not taking keys, `/` opens an on-demand search.
+//!
+//! Trees, from herdr's navigator and workspace sidebar (Apache-2.0), opt in
+//! per item: [`SelectItem::depth`] indents a row under the one above it with
+//! `├─ └─ │` connectors, [`SelectItem::group`] makes a `▾`/`▸` row whose
+//! deeper rows fold away (←/→, or [`SelectList::toggle`]), and a folded group
+//! says how many rows it hides. [`SelectList::columns`] adds meta columns at
+//! the right that appear by width, and [`SelectItem::detail`] a line under
+//! the list for the selected row. A list with neither draws as before.
 
 #[cfg(feature = "catalog")]
 pub(crate) mod docs;
@@ -57,6 +77,17 @@ pub struct SelectItem {
     pub disabled_reason: Option<String>,
     /// What the search matches against; the name when `None`.
     pub search_value: Option<String>,
+    /// Tree depth: 0 for a top row; a deeper row belongs to the nearest
+    /// shallower row above it.
+    pub depth: u8,
+    /// A group row: the deeper rows under it fold away.
+    pub group: bool,
+    /// A folded group (its rows hidden).
+    pub collapsed: bool,
+    /// Values for the meta columns ([`SelectList::columns`]), in order.
+    pub meta: Vec<String>,
+    /// A line shown under the list while this row is selected.
+    pub detail: Option<String>,
 }
 
 impl SelectItem {
@@ -91,8 +122,111 @@ impl SelectItem {
         self
     }
 
+    /// Indent under the nearest shallower row above (0 = top level).
+    pub fn depth(mut self, depth: u8) -> Self {
+        self.depth = depth;
+        self
+    }
+
+    /// A group row, open: `▾`, its deeper rows shown.
+    pub fn group(mut self) -> Self {
+        self.group = true;
+        self
+    }
+
+    /// A group row, folded: `▸` and `+N` for the rows it hides.
+    pub fn collapsed(mut self) -> Self {
+        self.group = true;
+        self.collapsed = true;
+        self
+    }
+
+    /// Values for the meta columns, left to right.
+    pub fn meta<S: Into<String>>(mut self, values: impl IntoIterator<Item = S>) -> Self {
+        self.meta = values.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// A line under the list while this row is selected (a path, an id).
+    pub fn detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
     pub fn is_disabled(&self) -> bool {
         self.disabled_reason.is_some()
+    }
+}
+
+/// A meta column at the right of every row: `width` cells, shown only when
+/// the row is at least `min_width` cells wide (herdr's navigator shows its
+/// agent column from 36 cells and its state column from 64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Column {
+    pub width: u16,
+    pub min_width: u16,
+}
+
+impl Column {
+    pub const fn new(width: u16) -> Self {
+        Self {
+            width,
+            min_width: 0,
+        }
+    }
+
+    /// Hidden on rows narrower than this.
+    pub const fn min_width(mut self, cells: u16) -> Self {
+        self.min_width = cells;
+        self
+    }
+}
+
+/// Tree connectors and group toggles. The toggles change with the state, so
+/// they are East-Asian Narrow (`▾` U+25BE, `▸` U+25B8). The box-drawing
+/// connectors are Ambiguous (two cells on a CJK terminal set to wide
+/// ambiguous glyphs) but they are rules, not state; [`TreeGlyphs::ascii`]
+/// avoids them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreeGlyphs {
+    /// A row with a later sibling: `├─ `.
+    pub branch: &'static str,
+    /// The last row of its parent: `└─ `.
+    pub last: &'static str,
+    /// An ancestor with a later sibling: `│  `.
+    pub pipe: &'static str,
+    /// An ancestor without one.
+    pub blank: &'static str,
+    /// An open group.
+    pub open: &'static str,
+    /// A folded group.
+    pub folded: &'static str,
+}
+
+impl Default for TreeGlyphs {
+    fn default() -> Self {
+        Self {
+            branch: "├─ ",
+            last: "└─ ",
+            pipe: "│  ",
+            blank: "   ",
+            open: "▾",
+            folded: "▸",
+        }
+    }
+}
+
+impl TreeGlyphs {
+    /// Plain ASCII: `|- `, `` `- ``, `|  `, `-` and `+`.
+    pub const fn ascii() -> Self {
+        Self {
+            branch: "|- ",
+            last: "`- ",
+            pipe: "|  ",
+            blank: "   ",
+            open: "-",
+            folded: "+",
+        }
     }
 }
 
@@ -194,6 +328,8 @@ pub struct SelectList {
     max_rows: usize,
     display: RowDisplay,
     glyphs: SelectGlyphs,
+    tree: TreeGlyphs,
+    columns: Vec<Column>,
     theme: Theme,
     filtered: Vec<usize>,
     state: ScrollState,
@@ -217,6 +353,8 @@ impl SelectList {
             max_rows: DEFAULT_MAX_ROWS,
             display: RowDisplay::Wrapped,
             glyphs: SelectGlyphs::default(),
+            tree: TreeGlyphs::default(),
+            columns: Vec::new(),
             theme: Theme::default(),
             filtered: Vec::new(),
             state: ScrollState::new(),
@@ -284,6 +422,19 @@ impl SelectList {
         self
     }
 
+    pub fn tree_glyphs(mut self, glyphs: TreeGlyphs) -> Self {
+        self.tree = glyphs;
+        self
+    }
+
+    /// Meta columns at the right of every row, left to right; each appears
+    /// when the row is at least its `min_width` wide. Values come from
+    /// [`SelectItem::meta`].
+    pub fn columns(mut self, columns: impl IntoIterator<Item = Column>) -> Self {
+        self.columns = columns.into_iter().collect();
+        self
+    }
+
     pub fn theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
         self
@@ -337,6 +488,120 @@ impl SelectList {
         self.search != Search::Off && self.search_active
     }
 
+    /// A search text is filtering: folds are set aside so matches show.
+    fn searching(&self) -> bool {
+        self.search_visible() && !self.query.is_empty()
+    }
+
+    /// Whether item `index` is a folded group.
+    pub fn is_collapsed(&self, index: usize) -> bool {
+        self.items
+            .get(index)
+            .is_some_and(|i| i.group && i.collapsed)
+    }
+
+    /// Fold or unfold group `index`; returns whether anything changed. The
+    /// cursor stays on its item when that is still shown, else moves to the
+    /// group.
+    pub fn set_collapsed(&mut self, index: usize, collapsed: bool) -> bool {
+        match self.items.get_mut(index) {
+            Some(item) if item.group && item.collapsed != collapsed => {
+                item.collapsed = collapsed;
+                let keep = self.selected();
+                self.apply_filter();
+                if keep.is_some_and(|k| !self.filtered.contains(&k))
+                    && let Some(v) = self.filtered.iter().position(|a| *a == index)
+                {
+                    self.state.selected_idx = Some(v);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Fold an open group, unfold a folded one (a click on its toggle).
+    pub fn toggle(&mut self, index: usize) -> bool {
+        let folded = self.is_collapsed(index);
+        self.set_collapsed(index, !folded)
+    }
+
+    /// The nearest shallower item above `index`.
+    fn parent(&self, index: usize) -> Option<usize> {
+        let depth = self.items.get(index)?.depth;
+        (0..index).rev().find(|&i| self.items[i].depth < depth)
+    }
+
+    /// For each item, one past its last descendant (rows deeper than it,
+    /// right below it). One pass with a stack.
+    fn subtree_ends(&self) -> Vec<usize> {
+        let n = self.items.len();
+        let mut end = vec![n; n];
+        let mut stack: Vec<usize> = Vec::new();
+        for (i, item) in self.items.iter().enumerate() {
+            while let Some(&top) = stack.last() {
+                if self.items[top].depth < item.depth {
+                    break;
+                }
+                end[top] = i;
+                stack.pop();
+            }
+            stack.push(i);
+        }
+        end
+    }
+
+    fn is_tree(&self) -> bool {
+        self.items.iter().any(|i| i.depth > 0 || i.group)
+    }
+
+    /// ←: fold the selected open group, else go to its parent.
+    fn tree_left(&mut self) -> Outcome {
+        let Some(a) = self.selected() else {
+            return Outcome::Ignored;
+        };
+        if !self.searching() && self.items[a].group && !self.items[a].collapsed {
+            self.set_collapsed(a, true);
+            return Outcome::Changed;
+        }
+        self.select_item(self.parent(a))
+    }
+
+    /// →: unfold the selected folded group, else go to its first row.
+    fn tree_right(&mut self) -> Outcome {
+        let Some(a) = self.selected() else {
+            return Outcome::Ignored;
+        };
+        if !self.searching() && self.is_collapsed(a) {
+            self.set_collapsed(a, false);
+            return Outcome::Changed;
+        }
+        let depth = self.items[a].depth;
+        let next = self
+            .filtered
+            .iter()
+            .position(|f| *f == a)
+            .and_then(|v| self.filtered.get(v + 1).copied())
+            .filter(|n| self.items[*n].depth > depth);
+        self.select_item(next)
+    }
+
+    /// Move the cursor to item `actual` when it is shown and enabled.
+    fn select_item(&mut self, actual: Option<usize>) -> Outcome {
+        let Some(actual) = actual.filter(|a| self.enabled(*a)) else {
+            return Outcome::Ignored;
+        };
+        match self.filtered.iter().position(|f| *f == actual) {
+            Some(v) => {
+                self.state.selected_idx = Some(v);
+                let (len, page) = (self.filtered.len(), self.page_rows());
+                self.state.ensure_visible(len, page);
+                Outcome::Changed
+            }
+            None => Outcome::Ignored,
+        }
+    }
+
     fn enabled(&self, actual: usize) -> bool {
         self.items.get(actual).is_some_and(|i| !i.is_disabled())
     }
@@ -374,20 +639,38 @@ impl SelectList {
             .flatten();
         let query = self.query.to_lowercase();
         self.filtered = if self.search_visible() && !query.is_empty() {
-            self.items
-                .iter()
-                .enumerate()
-                .filter(|(_, i)| {
-                    i.search_value
-                        .as_deref()
-                        .unwrap_or(&i.name)
-                        .to_lowercase()
-                        .contains(&query)
-                })
-                .map(|(n, _)| n)
-                .collect()
+            let hit = |i: &SelectItem| {
+                i.search_value
+                    .as_deref()
+                    .unwrap_or(&i.name)
+                    .to_lowercase()
+                    .contains(&query)
+            };
+            // Matches, with the rows they sit under so the tree still reads.
+            let mut keep = vec![false; self.items.len()];
+            for n in (0..self.items.len()).filter(|&n| hit(&self.items[n])) {
+                let mut at = Some(n);
+                while let Some(i) = at.filter(|i| !keep[*i]) {
+                    keep[i] = true;
+                    at = self.parent(i);
+                }
+            }
+            (0..self.items.len()).filter(|&n| keep[n]).collect()
         } else {
-            (0..self.items.len()).collect()
+            // Everything but the rows under a folded group.
+            let mut out = Vec::with_capacity(self.items.len());
+            let mut fold: Option<u8> = None;
+            for (n, item) in self.items.iter().enumerate() {
+                match fold {
+                    Some(d) if item.depth > d => continue,
+                    _ => fold = None,
+                }
+                out.push(n);
+                if item.group && item.collapsed {
+                    fold = Some(item.depth);
+                }
+            }
+            out
         };
         let find = |a: usize| self.filtered.iter().position(|f| *f == a);
         self.state.selected_idx = before
@@ -497,6 +780,8 @@ impl SelectList {
             }
             Key::Esc => Outcome::Cancelled,
             Key::Enter => self.accept(),
+            Key::Left if self.is_tree() => self.tree_left(),
+            Key::Right if self.is_tree() => self.tree_right(),
             Key::Backspace if self.search_visible() => self.edit_query(|q| {
                 q.pop();
             }),
@@ -526,7 +811,58 @@ impl SelectList {
         self.numbered && !self.search_visible()
     }
 
+    /// The tree gutter of each shown row: connectors from the depths, in one
+    /// backward pass, then the group toggle.
+    fn tree_gutters(&self) -> Vec<Vec<Span<'static>>> {
+        let len = self.filtered.len();
+        if !self.is_tree() {
+            return vec![Vec::new(); len];
+        }
+        let t = &self.theme;
+        let g = self.tree;
+        let depth = |v: usize| self.items[self.filtered[v]].depth as usize;
+        let max = (0..len).map(depth).max().unwrap_or(0);
+        // Levels with a group row get a toggle column, so leaves line up.
+        let mut toggles = vec![false; max + 1];
+        for v in 0..len {
+            if self.items[self.filtered[v]].group {
+                toggles[depth(v)] = true;
+            }
+        }
+        // `below[l]`: a row at depth l further down, before any shallower one.
+        let mut below = vec![false; max + 2];
+        let mut out = vec![Vec::new(); len];
+        for v in (0..len).rev() {
+            let d = depth(v);
+            let item = &self.items[self.filtered[v]];
+            let mut rule = String::new();
+            if d > 0 {
+                for open in &below[1..d] {
+                    rule.push_str(if *open { g.pipe } else { g.blank });
+                }
+                rule.push_str(if below[d] { g.branch } else { g.last });
+            }
+            let mut spans = Vec::new();
+            if !rule.is_empty() {
+                spans.push(Span::styled(rule, t.dim()));
+            }
+            if item.group {
+                let glyph = if item.collapsed { g.folded } else { g.open };
+                spans.push(Span::styled(format!("{glyph} "), t.accent()));
+            } else if toggles[d] {
+                spans.push(Span::raw(" ".repeat(text::width(g.open) + 1)));
+            }
+            out[v] = spans;
+            below[d] = true;
+            below[d + 1..].iter_mut().for_each(|b| *b = false);
+        }
+        out
+    }
+
     fn build_rows(&self) -> Vec<Row> {
+        let trees = self.tree_gutters();
+        let ends = self.subtree_ends();
+        let folds = !self.searching();
         let enabled_total = self.items.iter().filter(|i| !i.is_disabled()).count();
         let digits = enabled_total.max(1).to_string().len();
         let number_of: Vec<Option<usize>> = {
@@ -543,9 +879,10 @@ impl SelectList {
         };
         self.filtered
             .iter()
-            .map(|&a| {
+            .zip(trees)
+            .map(|(&a, tree)| {
                 let item = &self.items[a];
-                let gutter = if self.numbers_shown() {
+                let mut gutter = if self.numbers_shown() {
                     let label = match number_of[a] {
                         Some(n) => format!("{n:>digits$}. "),
                         None => " ".repeat(digits + 2),
@@ -554,14 +891,24 @@ impl SelectList {
                 } else {
                     Vec::new()
                 };
+                gutter.extend(tree);
+                let mut suffix = item.is_current.then(|| " (current)".to_string());
+                // A folded group says how many rows it hides.
+                let hidden = ends[a] - a - 1;
+                if folds && item.group && item.collapsed && hidden > 0 {
+                    suffix
+                        .get_or_insert_with(String::new)
+                        .push_str(&format!(" +{hidden}"));
+                }
                 Row {
                     gutter,
                     name: item.name.clone(),
                     match_indices: None,
-                    suffix: item.is_current.then(|| " (current)".to_string()),
+                    suffix,
                     description: item.description.clone(),
                     disabled_reason: item.disabled_reason.clone(),
                     disabled: item.is_disabled(),
+                    meta: item.meta.clone(),
                 }
             })
             .collect()
@@ -593,6 +940,9 @@ impl SelectList {
         if self.numbers_shown() && self.items.iter().any(|i| !i.is_disabled()) {
             pairs.push(("1-9", "pick"));
         }
+        if self.items.iter().any(|i| i.group) {
+            pairs.push(("←/→", "fold"));
+        }
         if self.search == Search::OnDemand && !self.search_active {
             pairs.push(("/", "search"));
         }
@@ -610,6 +960,32 @@ impl SelectList {
             .and_then(Row::description_text)
     }
 
+    /// The selected row's detail line, or an empty one while some other row
+    /// has a detail (the height holds still); `None` when no row has one.
+    fn detail(&self) -> Option<String> {
+        self.items.iter().any(|i| i.detail.is_some()).then(|| {
+            self.selected_item()
+                .and_then(|i| i.detail.clone())
+                .unwrap_or_default()
+        })
+    }
+
+    /// Widths of the meta columns that show on a row `width` cells wide.
+    fn shown_columns(&self, width: u16) -> Vec<u16> {
+        let cols: Vec<u16> = self
+            .columns
+            .iter()
+            .filter(|c| width >= c.min_width)
+            .map(|c| c.width)
+            .collect();
+        // Never all of the row: the name keeps a few cells.
+        if rows::meta_width(&cols).saturating_add(8) > width {
+            Vec::new()
+        } else {
+            cols
+        }
+    }
+
     fn cursor_w(&self) -> usize {
         text::width(self.glyphs.cursor)
     }
@@ -625,11 +1001,13 @@ impl SelectList {
 }
 
 impl SelectList {
-    /// Rows, their heights and the description column at `width`.
+    /// Rows, their heights and the description column at `width` (what
+    /// the meta columns leave of it).
     fn layout(&self, width: u16) -> (Vec<Row>, Vec<u16>, usize) {
         let rows = self.build_rows();
-        let col = rows::desc_col(&rows, width, self.cursor_w());
-        let hs = rows::heights(&rows, col, width, self.display);
+        let body = width - rows::meta_width(&self.shown_columns(width));
+        let col = rows::desc_col(&rows, body, self.cursor_w());
+        let hs = rows::heights(&rows, col, body, self.display);
         (rows, hs, col)
     }
 
@@ -639,6 +1017,7 @@ impl SelectList {
         heights: &'a [u16],
         col: usize,
         note: Option<String>,
+        width: u16,
     ) -> Frame<'a> {
         let t = &self.theme;
         let search = self.search_visible().then(|| {
@@ -648,6 +1027,9 @@ impl SelectList {
         let mut tail = Vec::new();
         if let Some(note) = note {
             tail.push(Line::styled(note, t.secondary()));
+        }
+        if let Some(detail) = self.detail() {
+            tail.push(Line::styled(detail, t.secondary()));
         }
         tail.push(self.footer_line());
         Frame {
@@ -663,6 +1045,7 @@ impl SelectList {
                 display: self.display,
                 desc_col: col,
                 selected: self.state.selected_idx,
+                columns: self.shown_columns(width),
             },
             empty: self.empty_line(),
             tail,
@@ -677,20 +1060,24 @@ impl Renderable for SelectList {
         // the cursor never changes the height.
         let note =
             (col == 0 && rows.iter().any(|r| r.description_text().is_some())).then(String::new);
-        self.frame(&rows, &hs, col, note).desired_height()
+        self.frame(&rows, &hs, col, note, width).desired_height()
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let (rows, hs, col) = self.layout(area.width);
         let note = self.note(&rows, col);
-        let painted = self.frame(&rows, &hs, col, note).render(area, buf);
+        let painted = self
+            .frame(&rows, &hs, col, note, area.width)
+            .render(area, buf);
         self.shown.set(painted.items);
     }
 
     /// After the search text, when the search line takes keys.
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let (rows, hs, col) = self.layout(area.width);
-        let (x, y) = self.frame(&rows, &hs, col, None).search_origin(area)?;
+        let (x, y) = self
+            .frame(&rows, &hs, col, None, area.width)
+            .search_origin(area)?;
         let label = if self.search == Search::OnDemand {
             2
         } else {
@@ -924,6 +1311,195 @@ mod tests {
         assert_eq!(
             SelectList::new(models()).cursor_pos(Rect::new(0, 0, 40, 10)),
             None
+        );
+    }
+
+    /// herdr's navigator: machines, workspaces, panes.
+    fn navigator() -> Vec<SelectItem> {
+        vec![
+            SelectItem::new("local").group(),
+            SelectItem::new("llmux")
+                .depth(1)
+                .group()
+                .detail("~/2lab.ai/llmux · main ↑2"),
+            SelectItem::new("claude")
+                .depth(2)
+                .meta(["claude-opus-5-5", "working"])
+                .detail("pane 1 · tab 2 · 14 turns"),
+            SelectItem::new("codex").depth(2).meta(["codex"]),
+            SelectItem::new("tui").depth(1).collapsed(),
+            SelectItem::new("shell")
+                .depth(2)
+                .meta(["terminal", "shell"]),
+            SelectItem::new("review").depth(2),
+            SelectItem::new("studio").group(),
+            SelectItem::new("deploy").depth(1).meta(["fx", "done"]),
+        ]
+    }
+
+    fn tree() -> SelectList {
+        SelectList::new(navigator())
+            .numbered(false)
+            .max_rows(12)
+            .theme(Theme::ansi())
+    }
+
+    fn herdr_columns() -> [Column; 2] {
+        [Column::new(11).min_width(36), Column::new(11).min_width(64)]
+    }
+
+    #[test]
+    fn tree_rows_draw_connectors_toggles_and_fold_counts() {
+        let list = tree();
+        let h = list.desired_height(40);
+        let lines = draw(&list, 40, h);
+        assert_eq!(
+            &lines[1..8],
+            &[
+                "› ▾ local",
+                "  ├─ ▾ llmux",
+                "  │  ├─ claude",
+                "  │  └─ codex",
+                "  └─ ▸ tui +2",
+                "  ▾ studio",
+                "  └─   deploy",
+            ]
+        );
+        assert_eq!(
+            list.visible_len(),
+            7,
+            "the folded group's two rows are hidden"
+        );
+        assert!(lines.last().is_some_and(|l| l.ends_with("←/→ fold")));
+        // The toggles change with the state: Narrow, one cell on CJK.
+        for g in [TreeGlyphs::default().open, TreeGlyphs::default().folded] {
+            assert_eq!(unicode_width::UnicodeWidthStr::width_cjk(g), 1, "{g}");
+        }
+        let ascii = tree().tree_glyphs(TreeGlyphs::ascii());
+        assert_eq!(draw(&ascii, 40, h)[3], "  |  |- claude");
+    }
+
+    #[test]
+    fn left_and_right_fold_unfold_and_walk_the_tree() {
+        let mut list = tree();
+        list.key(Key::Down.into());
+        assert_eq!(list.selected(), Some(1), "llmux");
+        assert_eq!(list.key(Key::Left.into()), Outcome::Changed);
+        assert!(list.is_collapsed(1));
+        assert_eq!(list.visible_len(), 5);
+        assert!(draw(&list, 40, 12).contains(&"› ├─ ▸ llmux +2".to_string()));
+        // ↓ steps over the hidden rows.
+        list.key(Key::Down.into());
+        assert_eq!(list.selected(), Some(4), "tui");
+        // ← on a closed group or a leaf goes to the parent.
+        assert_eq!(list.key(Key::Left.into()), Outcome::Changed);
+        assert_eq!(list.selected(), Some(0), "local");
+        assert_eq!(list.key(Key::Left.into()), Outcome::Changed, "folds local");
+        assert_eq!(list.visible_len(), 3);
+        assert_eq!(list.key(Key::Left.into()), Outcome::Ignored, "top level");
+        // → unfolds, then steps to the first row inside.
+        assert_eq!(list.key(Key::Right.into()), Outcome::Changed);
+        assert_eq!(list.visible_len(), 5);
+        assert_eq!(list.key(Key::Right.into()), Outcome::Changed);
+        assert_eq!(list.selected(), Some(1));
+        assert_eq!(
+            list.key(Key::Right.into()),
+            Outcome::Changed,
+            "unfolds llmux"
+        );
+        assert_eq!(list.key(Key::Right.into()), Outcome::Changed);
+        assert_eq!(list.selected(), Some(2), "claude");
+        assert_eq!(list.key(Key::Right.into()), Outcome::Ignored, "a leaf");
+        // A click on a toggle: fold the group the cursor is inside; the
+        // cursor moves up to the group.
+        assert!(list.toggle(1));
+        assert_eq!(list.selected(), Some(1));
+        assert!(!list.toggle(2), "not a group");
+        // Flat lists ignore ←/→.
+        let mut flat = SelectList::new(models());
+        assert_eq!(flat.key(Key::Left.into()), Outcome::Ignored);
+        assert_eq!(flat.key(Key::Right.into()), Outcome::Ignored);
+    }
+
+    #[test]
+    fn search_shows_matches_with_the_rows_above_them_through_folds() {
+        let list = SelectList::new(navigator())
+            .numbered(false)
+            .search(Search::Immediate)
+            .with_query("review");
+        let lines = draw(&list, 40, 10);
+        // `review` sits in the folded `tui`: shown with its parents.
+        assert_eq!(&lines[2..5], &["› ▾ local", "  └─ ▸ tui", "     └─ review"]);
+        assert!(list.is_collapsed(4), "the fold is kept for later");
+    }
+
+    // herdr cut meta values at 11 cells without a mark (H8): here they end
+    // in `…`, and a missing value says `—`.
+    #[test]
+    fn meta_columns_appear_by_width_and_never_cut_silently() {
+        let list = tree().columns(herdr_columns());
+        let row = |w: u16| draw(&list, w, list.desired_height(w))[3].clone();
+        assert_eq!(
+            row(70),
+            "  │  ├─ claude                                 claude-opu… working"
+        );
+        assert_eq!(
+            row(50),
+            "  │  ├─ claude                         claude-opu…"
+        );
+        assert_eq!(row(30), "  │  ├─ claude");
+        let lines = draw(&list, 70, 12);
+        assert!(lines[4].ends_with("codex       —"), "{:?}", lines[4]);
+        assert_eq!(lines[1], "› ▾ local", "no meta, no columns");
+        // The selected row's columns share its selection.
+        let mut list = list;
+        list.key(Key::Down.into());
+        list.key(Key::Down.into());
+        let area = Rect::new(0, 0, 70, 12);
+        let mut buf = Buffer::empty(area);
+        Renderable::render(&list, area, &mut buf);
+        assert!(buf[(60, 3)].modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn the_detail_line_follows_the_selection_without_moving_the_footer() {
+        let mut list = tree();
+        let h = list.desired_height(40);
+        let footer = draw(&list, 40, h).len() - 1;
+        let detail_row = footer - 1;
+        assert_eq!(draw(&list, 40, h)[detail_row], "", "local has no detail");
+        list.key(Key::Down.into());
+        assert_eq!(
+            draw(&list, 40, h)[detail_row],
+            "  ~/2lab.ai/llmux · main ↑2"
+        );
+        list.key(Key::Down.into());
+        assert_eq!(
+            draw(&list, 40, h)[detail_row],
+            "  pane 1 · tab 2 · 14 turns"
+        );
+        assert_eq!(list.desired_height(40), h);
+        // Narrow: cut with `…`.
+        assert_eq!(draw(&list, 16, h)[detail_row], "  pane 1 · tab …");
+    }
+
+    #[test]
+    fn mono_tells_open_and_folded_groups_apart_by_glyph() {
+        let list = tree().theme(Theme::mono()).columns(herdr_columns());
+        let area = Rect::new(0, 0, 70, 12);
+        let mut buf = Buffer::empty(area);
+        Renderable::render(&list, area, &mut buf);
+        for c in buf.content() {
+            assert!(
+                matches!(c.fg, ratatui::style::Color::Reset)
+                    && matches!(c.bg, ratatui::style::Color::Reset),
+                "{c:?}"
+            );
+        }
+        let lines = snapshot::lines(&buf);
+        assert!(
+            lines[2].contains('▾') && lines[5].contains('▸'),
+            "{lines:#?}"
         );
     }
 }
