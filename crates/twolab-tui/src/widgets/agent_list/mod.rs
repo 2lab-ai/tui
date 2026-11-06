@@ -316,21 +316,24 @@ fn lay(heights: &[u16], gap: u16, h: u16, o: usize) -> Lay {
     let top = o > 0 && h >= 3;
     let avail = h - u16::from(top);
     let mut shown = Vec::new();
-    let mut used = 0u16;
+    // Sums in u32: a row count plus a gap can pass u16::MAX, and a
+    // saturated sum would compare equal to a full screen and pass.
+    let mut used = 0u32;
     let mut k = o;
     while k < n {
-        let g = if k > o { gap } else { 0 };
+        let g = if k > o { u32::from(gap) } else { 0 };
         // Keep a row for `▾ +N more` while items remain after this one.
         let limit = if k + 1 < n && avail >= 2 {
             avail - 1
         } else {
             avail
         };
-        let need = g.saturating_add(heights[k]);
-        if used.saturating_add(need) > limit {
+        let need = g + u32::from(heights[k]);
+        if used + need > u32::from(limit) {
             break;
         }
-        shown.push((k, used + g, heights[k]));
+        // Inside `limit`, so it fits a u16.
+        shown.push((k, (used + g) as u16, heights[k]));
         used += need;
         k += 1;
     }
@@ -361,12 +364,13 @@ fn max_offset(heights: &[u16], gap: u16, h: u16) -> usize {
         return 0;
     }
     let mut o = n - 1;
-    let mut total = heights[o];
+    // u32, as in `lay`: never a saturated sum that passes as a fit.
+    let mut total = u32::from(heights[o]);
     while o > 0 {
         let c = o - 1;
-        let add = heights[c].saturating_add(gap);
-        let room = h - u16::from(c > 0 && h >= 3);
-        if total.saturating_add(add) > room {
+        let add = u32::from(heights[c]) + u32::from(gap);
+        let room = u32::from(h - u16::from(c > 0 && h >= 3));
+        if total + add > room {
             break;
         }
         total += add;
@@ -1096,6 +1100,42 @@ mod tests {
             .theme(Theme::ansi());
         render_list(&list, &mut state, 32, 10);
         assert!(state.layout().items.iter().any(|h| h.0 == 20));
+    }
+
+    /// Review #7: two items in 65,535 rows with gap(u16::MAX). The
+    /// saturating sum equalled the room, passed the check, and the plain
+    /// `+=` after it overflowed.
+    #[test]
+    fn a_huge_gap_and_area_do_not_overflow_the_sums() {
+        let items = [
+            AgentItem::new(AgentState::Working, "claude"),
+            AgentItem::new(AgentState::Idle, "codex"),
+        ];
+        let list = AgentList::new(&items)
+            .sort(Sort::Given)
+            .gap(u16::MAX)
+            .theme(Theme::ansi());
+        let mut state = AgentListState::new();
+        let buf = render_list(&list, &mut state, 12, u16::MAX);
+        assert_eq!(state.layout().items.len(), 1, "the gap leaves no room");
+        assert!(snapshot::text(&buf).contains("+1 more"));
+        for (heights, gap, h) in [
+            (&[1u16, 1][..], u16::MAX, u16::MAX),
+            (&[u16::MAX, u16::MAX][..], u16::MAX, u16::MAX),
+            (&[u16::MAX, 1, 1][..], 0, u16::MAX),
+            (&[1, u16::MAX - 1][..], 0, u16::MAX),
+        ] {
+            let o = max_offset(heights, gap, h);
+            for from in 0..heights.len() {
+                let l = lay(heights, gap, h, from);
+                for &(_, y, rows) in &l.shown {
+                    assert!(u32::from(y) + u32::from(rows) <= u32::from(l.avail));
+                }
+            }
+            assert!(o < heights.len());
+        }
+        assert_eq!(max_offset(&[1, u16::MAX - 1], 0, u16::MAX), 0, "they fit");
+        assert_eq!(lay(&[1, u16::MAX - 1], 0, u16::MAX, 0).shown.len(), 2);
     }
 
     #[test]
