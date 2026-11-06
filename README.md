@@ -11,11 +11,12 @@ twolab-tui = { git = "https://github.com/2lab-ai/tui" }
 
 ## What is in it
 
-Widgets come from three working apps, each named on its catalog page with its upstream file and licence:
+Widgets come from four working apps, each named on its catalog page with its upstream file and licence:
 
 - from llmux (2lab's quota dashboard): spinner families, quota meter, share bar, ledger amounts, gradient text, banner and flash, tabs, context menu, JSON view, packed grid, trend chart
 - from OpenAI Codex: shimmer, working line, key hints, status card, layout containers, select list, multi-select, pager
 - from Vercel fx: approval card, question form, diff view, composer, completion menu, status bar, fact table, rule
+- from herdr: modal, toast, agent list, scrollbar — and a single-line masked composer, fair-share status bar, filterable key help, selection colours, tab scroll buttons, menu badges, tree rows and pager selection added to existing widgets
 
 The catalog groups them by what they tell the person: Agent, Data, Input and Primitives.
 
@@ -47,4 +48,4 @@ npm ci && npm run build:site && npx vite preview   # the web catalog at http://l
 
 ## Licence
 
-Apache-2.0. Code derived from OpenAI Codex and Vercel fx keeps its Apache-2.0 notices; see [NOTICE](NOTICE). Not affiliated with or endorsed by OpenAI or Vercel.
+Apache-2.0. Code derived from OpenAI Codex, Vercel fx and herdr keeps its Apache-2.0 notices; see [NOTICE](NOTICE). Not affiliated with or endorsed by OpenAI, Vercel or the herdr authors.

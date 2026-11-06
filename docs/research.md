@@ -20,9 +20,9 @@ Read sections 1 and 5 if you only want the decisions. Read section 4 before you 
 
 - Five ecosystems (ratatui and its community crates, Charm, Textual, Ink, OpenTUI) agree on a standard set: panel, text, selectable list, select, table, progress bar, spinner, text input, text area, scroll view, tabs, tree and a key-hint footer.
 - ratatui 0.30 ships 17 primitives but no spinner, shimmer, key hints, toast, command palette, text input, scroll view, diff, markdown, status bar or modal. Community crates exist for most of these, but they are small, young, and share no theme, motion or focus model.
-- The three apps we studied had already solved most of these, each in its own way. llmux had quota meters, spinners and tabs; Codex had shimmer, key hints, pickers and a pager; fx had the approval band, the question form, the diff view and the composer.
+- The four apps we studied had already solved most of these, each in its own way. llmux had quota meters, spinners and tabs; Codex had shimmer, key hints, pickers and a pager; fx had the approval band, the question form, the diff view and the composer; herdr had the modal, toasts, an agent list and a draggable scrollbar.
 - The library's value is the shared rules, not any one widget: time is an input, colour comes from a theme, width is measured in cells, motion can be turned off, and nothing is cut without saying so.
-- The catalog compiles the crate itself to WebAssembly (about 750 KB, 280 KB compressed, for 27 widgets and 85 demos, no imports) and paints each demo's cells in the page. What you see on the site is the Rust code, not a recording.
+- The catalog compiles the crate itself to WebAssembly (about 960 KB, 360 KB gzipped, for 31 widgets and 112 demos, no imports) and paints each demo's cells in the page. What you see on the site is the Rust code, not a recording.
 - The crate is Apache-2.0, because the Codex and fx code it carries can only be offered under Apache terms.
 
 ## What terminal UI libraries already offer
@@ -219,7 +219,7 @@ The same review found a bug in ratatui 0.30 itself: its word wrapper can emit a 
 
 ## What we took, and from where
 
-27 widgets, each with at least three demos. The [sources and licences](/tui/docs/licences) page links each one to its upstream file.
+31 widgets, each with at least three demos. The [sources and licences](/tui/docs/licences) page links each one to its upstream file.
 
 | Group | Widget | From | What it tells the person |
 |---|---|---|---|
@@ -228,6 +228,8 @@ The same review found a bug in ratatui 0.30 itself: its word wrapper can emit a 
 | Agent | Status bar | fx | Mode, model, how full the context is, and what you just armed |
 | Agent | Approval card | fx | What the agent wants to do, how risky it is, and your options |
 | Agent | Banner and flash | llmux | Something is on until a deadline; whether the last action worked |
+| Agent | Toast | herdr | A message over the screen that says what kind it is and goes away on its own |
+| Agent | Agent list | herdr | Who is doing what, and who needs you first |
 | Data | Meter | llmux | How much of a quota window is used or left and when it resets |
 | Data | Mini bar | llmux | A row's share of the biggest one |
 | Data | Ledger amount | llmux | Money lined up on the decimal point |
@@ -247,6 +249,8 @@ The same review found a bug in ratatui 0.30 itself: its word wrapper can emit a 
 | Input | Menu | llmux | What you can do to this thing, where you clicked |
 | Primitives | Layout | Codex | Who gets the rows when there are not enough |
 | Primitives | Pager | Codex | The whole text, and where you are in it |
+| Primitives | Modal | herdr | Something needs an answer before you go on, in a box sized to what it says |
+| Primitives | Scrollbar | herdr | How much there is, where you are, and a thumb the mouse can drag |
 | Primitives | Rule | fx | Where a band or section starts |
 | Primitives | Spinner | llmux | That something is in progress, and which kind |
 | Primitives | Gradient text | llmux | That a name is special |

@@ -20,6 +20,10 @@ This product includes software derived from xfx
 (https://github.com/2lab-ai/xfx, commit 93f516b537adf52db208e3a343d9229c5f3d40e2),
 Copyright 2026 2lab.ai, licensed under the Apache License 2.0.
 
+This product includes software derived from herdr
+(https://github.com/herdrdev/herdr, commit ee5bfb5041bb3e4a49d591c72308aae3c81ecdde),
+licensed under the Apache License 2.0.
+
 This product includes software derived from llmux
 (https://github.com/2lab-ai/llmux, commit 524b6e437fd9e67bf2d3fdd507267107291cb6ac),
 licensed under the MIT License.
@@ -27,7 +31,7 @@ licensed under the MIT License.
   Copyright (c) 2026 2lab.ai (llmux Rust port)
   (full MIT permission notice in licenses/llmux.LICENSE)
 
-2lab-ai/tui is not affiliated with or endorsed by OpenAI or Vercel. Every
+2lab-ai/tui is not affiliated with or endorsed by OpenAI, Vercel or the herdr authors. Every
 derived file starts with a header naming its upstream file and saying it was
 modified.
 
@@ -82,6 +86,20 @@ Files derived from Vercel fx (upstream path -> path here):
   src/ui/input/shortcuts.zig -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
   src/ui/input/visual_layout.zig -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
   src/ui/render.zig -> crates/twolab-tui/src/widgets/status_bar/mod.rs (Apache-2.0, Vercel, translated from Zig, modified)
+
+Files derived from herdr (upstream path -> path here), all at commit ee5bfb5041bb3e4a49d591c72308aae3c81ecdde:
+  src/ui/scrollbar.rs, src/client/shell/scroll.rs -> crates/twolab-tui/src/widgets/scrollbar/mod.rs (Apache-2.0, herdr, modified)
+  src/popup_size.rs, src/ui/widgets.rs, src/client/shell/overlays.rs, src/ui/release_notes.rs -> crates/twolab-tui/src/widgets/modal/mod.rs (Apache-2.0, herdr, modified)
+  src/client/shell/notifications.rs, src/client/shell/notification_policy.rs, src/ui/status.rs, src/ui.rs -> crates/twolab-tui/src/widgets/toast/mod.rs (Apache-2.0, herdr, modified)
+  src/client/shell/agent_sidebar.rs, src/client/shell.rs, src/client/shell/sidebar.rs, src/client/shell/mobile.rs -> crates/twolab-tui/src/widgets/agent_list/mod.rs (Apache-2.0, herdr, modified)
+  src/client/shell/text_editor.rs -> crates/twolab-tui/src/widgets/composer/mod.rs (Apache-2.0, herdr, modified)
+  src/ui/sidebar.rs -> crates/twolab-tui/src/widgets/status_bar/mod.rs (Apache-2.0, herdr, modified)
+  src/input/keybind_help.rs, src/client/shell/overlays.rs -> crates/twolab-tui/src/widgets/key_hints/mod.rs (Apache-2.0, herdr, modified)
+  src/ui/panes.rs -> crates/twolab-tui/src/color.rs, crates/twolab-tui/src/theme.rs (Apache-2.0, herdr, modified)
+  src/client/shell/tabs.rs, src/client/shell/mouse.rs -> crates/twolab-tui/src/widgets/tabs/mod.rs (Apache-2.0, herdr, modified)
+  src/client/shell/global_menu.rs, src/client/shell/overlays.rs -> crates/twolab-tui/src/widgets/menu/mod.rs (Apache-2.0, herdr, modified)
+  src/client/shell/overlays.rs, src/client/shell/sidebar.rs -> crates/twolab-tui/src/widgets/select_list/mod.rs (Apache-2.0, herdr, modified)
+  src/selection.rs, src/client/shell/mouse.rs, src/ui/panes.rs, src/ui/release_notes.rs -> crates/twolab-tui/src/widgets/pager/mod.rs (Apache-2.0, herdr, modified)
 
 Logic lifted from xfx, 2lab's Rust port of fx (upstream path -> path here):
   src/tui/approval_view.rs -> crates/twolab-tui/src/widgets/approval_card/mod.rs (Apache-2.0, 2lab)
