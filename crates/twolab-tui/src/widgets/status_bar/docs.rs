@@ -5,7 +5,7 @@ use ratatui::widgets::Widget;
 
 use super::{Segment, StatusBar, context_label, model_label};
 use crate::catalog::{ComponentDoc, DemoCx, DemoDoc, FnDemo, Group, PropDoc, Source};
-use crate::theme::{Level, Theme};
+use crate::theme::{Level, Status, Theme};
 
 const USAGE: &str = r#"use twolab_tui::status_bar::{Segment, StatusBar, context_label, model_label};
 
@@ -20,7 +20,17 @@ let armed = bar
     .cue(["press esc again to interrupt", "esc again to interrupt", "esc esc"])
     .cue_alone("esc esc to interrupt");
 
-frame.render_widget(&armed, footer_row);"#;
+frame.render_widget(&armed, footer_row);
+
+// Fair share: flexible segments give way (to one cell, cut with …) before
+// anything is dropped; `+N` counts what was.
+let row = StatusBar::new(theme)
+    .segment(Segment::new("working").priority(9))
+    .segment(Segment::new("claude").flex())
+    .segment(Segment::new("llmux-dashboard").flex())
+    .segment(Segment::new("feat/quota-poller-backoff").flex())
+    .count_dropped(true);
+for (i, rect) in row.hits(row_area) { hits.push(rect, i); }"#;
 
 const INTERRUPT: [&str; 4] = [
     "press esc again to interrupt",
@@ -101,6 +111,44 @@ fn armed(area: Rect, buf: &mut Buffer, cx: &DemoCx) {
     );
 }
 
+/// herdr's agent row: the state word stays whole, the names share the rest.
+fn agent_row(t: &Theme) -> StatusBar {
+    StatusBar::new(*t)
+        .segment(
+            Segment::new("working")
+                .style(t.status(Status::Running))
+                .priority(9),
+        )
+        .segment(Segment::new("claude").style(t.text()).flex().priority(3))
+        .segment(Segment::new("llmux-dashboard").flex().priority(2))
+        .segment(Segment::new("feat/quota-poller-backoff").flex().priority(1))
+        .segment(Segment::new("~/src/llmux").flex())
+        .count_dropped(true)
+}
+
+fn fair_share(area: Rect, buf: &mut Buffer, cx: &DemoCx) {
+    let t = &cx.theme;
+    stack(
+        area,
+        buf,
+        t,
+        &[
+            ("76 columns: everything", 76, agent_row(t)),
+            (
+                "48: the names share what is left, each cut with …",
+                48,
+                agent_row(t),
+            ),
+            (
+                "22: one cell each no longer fits, so the lowest go and +N counts them",
+                22,
+                agent_row(t),
+            ),
+            ("14: the state word and a count", 14, agent_row(t)),
+        ],
+    );
+}
+
 fn unknown(area: Rect, buf: &mut Buffer, cx: &DemoCx) {
     let t = &cx.theme;
     stack(
@@ -152,8 +200,8 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
     name: "Status bar",
     ty: "twolab_tui::status_bar::StatusBar",
     summary: "What mode, which model, how full the context is, and what you just armed.",
-    description: "One row of facts joined by ` · `. Each segment has a priority; as the row narrows, whole segments go — lowest priority first — and only the last one standing is cut. The right end holds a cue about the next keystroke, reserved before the left is laid out and shortened through its variants, or a note that shows only when it fits. Unknown values read as —, never 0.",
-    used_in: "fx's hint row under the composer (mode · model · effort · context · workspace, esc cues on the right); llmux's footer (keybar or mode on the left, a transient status on the right).",
+    description: "One row of facts joined by ` · `. Each segment has a priority; as the row narrows, whole segments go — lowest priority first — and only the last one standing is cut. Segments marked flex share the row first (herdr's sidebar fit): each keeps a cell, the spare cells are dealt round-robin, each cut with …, and segments drop only when those minimums do not fit; +N can count what went. The right end holds a cue about the next keystroke, reserved before the left is laid out and shortened through its variants, or a note that shows only when it fits. Unknown values read as —, never 0.",
+    used_in: "fx's hint row under the composer (mode · model · effort · context · workspace, esc cues on the right); llmux's footer (keybar or mode on the left, a transient status on the right); herdr's agent and workspace rows (state · agent · workspace · branch, shared by width).",
     source: Source {
         project: "fx",
         url: "https://github.com/vercel-labs/fx/blob/412d841d73dd6e1b8de551022728d9c929caae17/src/ui/render.zig#L194-L470",
@@ -173,6 +221,24 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
             ty: "Segment",
             default: Some("priority 0, row style"),
             description: "A fact on the left. Higher priority stays longer; empty text takes no separator.",
+        },
+        PropDoc {
+            name: "Segment::flex()",
+            ty: "Segment",
+            default: Some("fixed"),
+            description: "Shrinks before anything drops: keeps one cell, gets its round-robin share of the spare cells, cut with … when that is not all of it.",
+        },
+        PropDoc {
+            name: ".count_dropped(on)",
+            ty: "bool",
+            default: Some("false"),
+            description: "End the left with +N when N segments were dropped; its room is kept before the segments are fitted.",
+        },
+        PropDoc {
+            name: ".hits(area)",
+            ty: "Vec<(usize, Rect)>",
+            default: None,
+            description: "The rect each kept segment is drawn in (a shared one: the cells it got), for a HitMap; dropped segments have none.",
         },
         PropDoc {
             name: ".cue(variants) / .cue_alone(text)",
@@ -202,12 +268,12 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
             name: ".layout(width) / .line(width)",
             ty: "BarLayout / Line<'static>",
             default: None,
-            description: "What stays at a width, or the row as a line for a host's own paragraph.",
+            description: "What stays at a width (kept, widths, dropped, counted), or the row as a line for a host's own paragraph.",
         },
     ],
     keyboard: &[],
     a11y: &[
-        "Never cut silently: segments go whole, and the one that cannot fit alone ends in ….",
+        "Never cut silently: segments go whole, a shared or lone segment that is cut ends in …, and count_dropped says +N for what went.",
         "A cue about a destructive key is reserved first and never dropped; on the narrowest row it takes the whole row.",
         "In mono the cue is bold and the note dim, so the right end still reads apart from the facts.",
         "Unknowns say — with a noun (`model —`), never a made-up 0.",
@@ -243,6 +309,16 @@ pub(crate) const DOC: ComponentDoc = ComponentDoc {
             animated: false,
             interactive: false,
             make: || Box::new(FnDemo(unknown)),
+        },
+        DemoDoc {
+            id: "fair-share",
+            title: "Fair share",
+            description: "herdr's agent row: the state word stays whole, the names share the rest one cell at a time, and +N counts the segments that had to go.",
+            cols: 76,
+            rows: 8,
+            animated: false,
+            interactive: false,
+            make: || Box::new(FnDemo(fair_share)),
         },
     ],
 };
