@@ -1,6 +1,7 @@
 //! Every widget module. Each has `mod.rs` (the widget) and, behind the
 //! `catalog` feature, `docs.rs` (its catalog entry).
 
+pub mod agent_list;
 pub mod approval_card;
 pub mod banner;
 pub mod choice_form;
@@ -28,5 +29,6 @@ pub mod spinner;
 pub mod status_bar;
 pub mod status_card;
 pub mod tabs;
+pub mod toast;
 pub mod trend_chart;
 pub mod working;
